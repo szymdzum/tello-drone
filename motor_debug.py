@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 Motor debug — identify which motor is faulty.
 
 Strategy: send takeoff, immediately sample IMU data (pitch/roll),
@@ -26,8 +26,9 @@ Tilt diagnosis:
 The drone tips TOWARD the dead motor (no thrust on that corner).
 """
 
-import time
 import threading
+import time
+
 from tello import Tello, TelloError
 
 
@@ -107,17 +108,17 @@ def diagnose_motor(samples):
         "RIGHT":         ("M2 or M4", "Right side",  "—"),
     }
 
-    print(f"  ┌────────────────────────────────────────────┐")
-    print(f"  │  MOTOR LAYOUT (top view, camera = front)   │")
-    print(f"  │                                            │")
-    print(f"  │   [M1 CW]    FRONT ↑    [M2 CCW]          │")
-    print(f"  │       \\       CAMERA      /                │")
-    print(f"  │        \\                 /                 │")
-    print(f"  │         [  MAINBOARD  ]                    │")
-    print(f"  │        /                 \\                 │")
-    print(f"  │       /                   \\                │")
-    print(f"  │   [M3 CCW]    REAR      [M4 CW]           │")
-    print(f"  └────────────────────────────────────────────┘")
+    print("  ┌────────────────────────────────────────────┐")
+    print("  │  MOTOR LAYOUT (top view, camera = front)   │")
+    print("  │                                            │")
+    print("  │   [M1 CW]    FRONT ↑    [M2 CCW]          │")
+    print("  │       \\       CAMERA      /                │")
+    print("  │        \\                 /                 │")
+    print("  │         [  MAINBOARD  ]                    │")
+    print("  │        /                 \\                 │")
+    print("  │       /                   \\                │")
+    print("  │   [M3 CCW]    REAR      [M4 CW]           │")
+    print("  └────────────────────────────────────────────┘")
     print()
 
     if not tilt:
@@ -131,9 +132,9 @@ def diagnose_motor(samples):
     elif tilt in motor_map:
         motor_id, position, direction = motor_map[tilt]
         print(f"  🔴 TILT DETECTED: {tilt}")
-        print(f"  ─────────────────────────────")
+        print("  ─────────────────────────────")
         print(f"  Faulty motor:  {motor_id} ({position}, spins {direction})")
-        print(f"  Drone tilted toward this corner = no thrust there")
+        print("  Drone tilted toward this corner = no thrust there")
         print()
         print(f"  FIX: Power off → open shell → reseat the {position} motor cable")
     else:
@@ -141,7 +142,7 @@ def diagnose_motor(samples):
 
     # Print raw samples for reference
     print(f"\n{'─' * 50}")
-    print(f"  RAW TELEMETRY LOG")
+    print("  RAW TELEMETRY LOG")
     print(f"{'─' * 50}")
     print(f"  {'time':>5}  {'pitch':>6}  {'roll':>6}  {'yaw':>5}  {'h':>4}  {'vgx':>5}  {'vgy':>5}  {'vgz':>5}")
     for s in samples:

@@ -18,7 +18,6 @@ Usage:
 import socket
 import threading
 import time
-from typing import Optional
 
 
 class TelloError(Exception):
@@ -52,7 +51,7 @@ class Tello:
         self._state_lock = threading.Lock()
         self._running = False
         self._connected = False
-        self._state_thread: Optional[threading.Thread] = None
+        self._state_thread: threading.Thread | None = None
 
     # ── Connection ──────────────────────────────────────────────
 
@@ -72,7 +71,7 @@ class Tello:
                 response = self.send_command("command")
                 if "ok" in response.lower():
                     self._connected = True
-                    print(f"✓ Connected to Tello (SDK mode)")
+                    print("✓ Connected to Tello (SDK mode)")
                     return response
                 else:
                     print(f"  Attempt {attempt}/{retries}: unexpected response '{response}'")
@@ -102,11 +101,11 @@ class Tello:
         while True:
             try:
                 sock.recvfrom(1518)
-            except (socket.timeout, BlockingIOError, OSError):
+            except (TimeoutError, BlockingIOError, OSError):
                 break
         sock.settimeout(original_timeout)
 
-    def send_command(self, command: str, timeout: Optional[float] = None) -> str:
+    def send_command(self, command: str, timeout: float | None = None) -> str:
         """Send a text command and wait for the response string."""
         timeout = timeout or self.RESPONSE_TIMEOUT
         self._cmd_socket.settimeout(timeout)
@@ -116,8 +115,8 @@ class Tello:
         try:
             data, _ = self._cmd_socket.recvfrom(1518)
             response = data.decode("utf-8", errors="replace").strip()
-        except socket.timeout:
-            raise TelloError(f"Timed out waiting for response to '{command}'")
+        except TimeoutError as e:
+            raise TelloError(f"Timed out waiting for response to '{command}'") from e
 
         if response.lower().startswith("error"):
             raise TelloError(f"Command '{command}' failed: {response}")
@@ -252,7 +251,7 @@ class Tello:
                 parsed = self._parse_state(raw)
                 with self._state_lock:
                     self._state = parsed
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break

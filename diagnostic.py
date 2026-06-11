@@ -8,6 +8,7 @@ hardware issues.
 """
 
 import time
+
 from tello import Tello, TelloError
 
 
@@ -52,7 +53,7 @@ def run_diagnostic(drone: Tello) -> None:
         elif level < 20:
             print("  ⚠️  WARNING: Battery too low for flight")
         else:
-            print(f"  ✓ Battery OK")
+            print("  ✓ Battery OK")
 
     # ── 3. Sensors / Environment ────────────────────────────
     section("3. SENSORS")
