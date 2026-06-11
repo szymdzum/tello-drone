@@ -1,45 +1,47 @@
 """
-flight/hud.py — render-agnostic HUD content for the FPV overlay.
+flight/hud.py — the data layer for the HUD.
 
-Decides WHAT the heads-up display shows (telemetry, rc vector, control help);
-the shell decides HOW to render it. The on-screen control reference lives in
-one place — next to a test that checks it against the keymap in controller.py.
+snapshot() collects everything a renderer needs from drone telemetry and the
+flight controller; HELP_LINES is the on-screen control reference. Rendering
+lives in tello_app/shells/hud_render.py — this module stays presentation-free
+so it's unit-testable without cv2.
 """
 from tello_app.flight.controller import FlightController
 from tello_app.tello import Tello
 
 # On-screen control reference. Mirrors controller.MOVES / DISCRETES;
 # test_hud.py asserts every mapped key appears here so the two can't drift.
+# ASCII only — OpenCV's Hershey fonts render anything else as '?'.
 HELP_LINES = (
-    "W/S fwd/back   A/D strafe   I/K up/down   J/L yaw",
-    "t takeoff   g land   f flip   h hover   y/u speed",
-    "SPACE = EMERGENCY (drops!)        Esc/q = quit",
+    "W/S fwd-back   A/D strafe   I/K up-down   J/L yaw   "
+    "t/g/f/h   y/u speed   SPACE emergency   Esc/q quit",
 )
 
 
-def telemetry_parts(drone: Tello, fc: FlightController) -> list[tuple[str, str]]:
-    """(label, value) pairs so a renderer can style each readout individually."""
+def snapshot(drone: Tello, fc: FlightController) -> dict:
+    """Everything a HUD renderer needs, in one dict. Values that haven't
+    arrived in telemetry yet are None (attitude defaults to level)."""
     st = drone.state
-    return [
-        ("battery", f"{st.get('bat', '?')}%"),
-        ("alt", f"{st.get('h', '?')}cm"),
-        ("speed", str(fc.speed)),
-        ("flying", str(fc.flying)),
-    ]
 
+    def num(key: str) -> int | float | None:
+        v = st.get(key)
+        return v if isinstance(v, (int, float)) else None
 
-def telemetry_line(drone: Tello, fc: FlightController) -> str:
-    """Battery / altitude / speed / flying — from pushed state + controller."""
-    return "   ".join(f"{label} {value}" for label, value in telemetry_parts(drone, fc))
-
-
-def battery_level(drone: Tello) -> int | None:
-    """Battery % as an int, or None while telemetry hasn't arrived yet."""
-    bat = drone.state.get("bat")
-    return bat if isinstance(bat, int) else None
-
-
-def rc_line(rc: tuple[int, int, int, int]) -> str:
-    """The rc vector currently being streamed to the drone."""
-    lr, fb, ud, yaw = rc
-    return f"rc  lr={lr:+d} fb={fb:+d} ud={ud:+d} yaw={yaw:+d}"
+    vgx, vgy, vgz = num("vgx"), num("vgy"), num("vgz")
+    vel = None
+    if vgx is not None and vgy is not None and vgz is not None:
+        vel = (vgx * vgx + vgy * vgy + vgz * vgz) ** 0.5 / 10.0  # dm/s -> m/s
+    return {
+        "bat": num("bat"),
+        "alt": num("h"),          # cm
+        "tof": num("tof"),        # cm
+        "temp": num("temph"),     # deg C
+        "time": num("time"),      # flight seconds
+        "vel": vel,               # m/s ground velocity magnitude
+        "pitch": num("pitch") or 0,
+        "roll": num("roll") or 0,
+        "yaw": num("yaw") or 0,
+        "speed": fc.speed,
+        "flying": fc.flying,
+        "emergency": fc.emergency,
+    }

@@ -45,6 +45,7 @@ def main() -> None:
     drone = Tello()
     try:
         drone.connect(retries=3)
+        drone.start_keepalive()  # ground-only — keeps a parked drone awake
         print(f"Battery: {drone.get_battery()}%")
         run(drone)
     except TelloError as e:

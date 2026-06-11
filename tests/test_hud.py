@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests for hud.py — the shared HUD content. The important one is anti-drift: every
+Tests for hud.py — the HUD data layer. The important one is anti-drift: every
 key in the controller keymap must be documented in the on-screen help, so
 a remapped/added key can't silently vanish from the HUD.
 """
@@ -28,36 +28,40 @@ class TestHelpMirrorsKeymap(unittest.TestCase):
         for ch in ("t", "g", "f", "h", "y", "u", "q"):
             self.assertIn(ch, help_text, f"action key {ch!r} missing from HUD help")
 
+    def test_help_is_ascii_only(self):
+        """OpenCV's Hershey fonts render non-ASCII as '?'."""
+        self.assertTrue(all(line.isascii() for line in hud.HELP_LINES))
 
-class TestContentLines(unittest.TestCase):
-    def test_telemetry_line_pulls_state_and_speed(self):
+
+class TestSnapshot(unittest.TestCase):
+    def test_full_state(self):
         drone = MagicMock()
-        drone.state = {"bat": 64, "h": 80}
-        fc = FlightController(speed=40)
-        line = hud.telemetry_line(drone, fc)
-        self.assertIn("64", line)
-        self.assertIn("80", line)
-        self.assertIn("40", line)
-        self.assertIn("False", line)  # not flying
+        drone.state = {"bat": 68, "h": 132, "tof": 72, "temph": 37, "time": 84,
+                       "pitch": 5, "roll": -3, "yaw": 124,
+                       "vgx": 4, "vgy": 3, "vgz": 0}
+        snap = hud.snapshot(drone, FlightController(speed=60))
+        self.assertEqual(snap["bat"], 68)
+        self.assertEqual(snap["alt"], 132)
+        self.assertEqual(snap["yaw"], 124)
+        self.assertEqual(snap["speed"], 60)
+        self.assertAlmostEqual(snap["vel"], 0.5)  # sqrt(4^2+3^2) dm/s -> m/s
+        self.assertFalse(snap["flying"])
+        self.assertFalse(snap["emergency"])
 
-    def test_rc_line_format(self):
-        self.assertEqual(hud.rc_line((1, -2, 3, -4)), "rc  lr=+1 fb=-2 ud=+3 yaw=-4")
-
-    def test_telemetry_line_is_built_from_parts(self):
-        """The string and structured views can't drift apart."""
+    def test_empty_state_defaults(self):
         drone = MagicMock()
-        drone.state = {"bat": 64, "h": 80}
-        fc = FlightController(speed=40)
-        parts = hud.telemetry_parts(drone, fc)
-        self.assertEqual(hud.telemetry_line(drone, fc),
-                         "   ".join(f"{k} {v}" for k, v in parts))
-
-    def test_battery_level(self):
-        drone = MagicMock()
-        drone.state = {"bat": 47}
-        self.assertEqual(hud.battery_level(drone), 47)
         drone.state = {}
-        self.assertIsNone(hud.battery_level(drone))
+        snap = hud.snapshot(drone, FlightController())
+        self.assertIsNone(snap["bat"])
+        self.assertIsNone(snap["vel"])
+        self.assertEqual((snap["pitch"], snap["roll"], snap["yaw"]), (0, 0, 0))
+
+    def test_emergency_flag_flows_through(self):
+        drone = MagicMock()
+        drone.state = {}
+        fc = FlightController()
+        fc.emergency = True
+        self.assertTrue(hud.snapshot(drone, fc)["emergency"])
 
 
 if __name__ == "__main__":

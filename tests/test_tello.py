@@ -103,6 +103,52 @@ class TestProtocol(unittest.TestCase):
         self.assertIn("rc 0 0 50 0", self.fake.received)
 
 
+class TestKeepalive(unittest.TestCase):
+    """start_keepalive must wake a quiet GROUNDED drone with zero rc, stay
+    silent while real traffic is flowing, and — safety-critical — stay silent
+    while AIRBORNE so the Tello's 15 s auto-land failsafe remains armed and a
+    pilot's rc setpoint is never overridden with zeros."""
+
+    def setUp(self):
+        self.fake = FakeDrone()
+        self.drone = make_tello(self.fake)
+        self.drone.connect(retries=1)
+
+    def tearDown(self):
+        self.drone.close()
+        self.fake.close()
+
+    def _set_state(self, state):
+        with self.drone._state_lock:
+            self.drone._state = state
+
+    def test_quiet_grounded_link_gets_rc_heartbeat(self):
+        self._set_state({"h": 0})
+        self.drone.start_keepalive(interval=0.3)
+        time.sleep(1.2)
+        self.assertIn("rc 0 0 0 0", self.fake.received)
+
+    def test_airborne_drone_is_never_touched(self):
+        self._set_state({"h": 50})  # flying — the failsafe must stay armed
+        self.drone.start_keepalive(interval=0.2)
+        time.sleep(1.0)
+        self.assertNotIn("rc 0 0 0 0", self.fake.received)
+
+    def test_no_telemetry_means_no_heartbeat(self):
+        # Without state packets we can't prove the drone is grounded — stay silent.
+        self.drone.start_keepalive(interval=0.2)
+        time.sleep(1.0)
+        self.assertNotIn("rc 0 0 0 0", self.fake.received)
+
+    def test_busy_link_is_left_alone(self):
+        self._set_state({"h": 0})
+        self.drone.start_keepalive(interval=0.4)
+        for _ in range(8):
+            self.drone.send_rc(0, 0, 50, 0)  # active stick stream
+            time.sleep(0.1)
+        self.assertNotIn("rc 0 0 0 0", self.fake.received)
+
+
 class TestBinaryPacketDiscard(unittest.TestCase):
     """The Tello also speaks its old binary protocol on the command port (boot
     banners, DJI_LOG spam). Those datagrams must never be matched as the reply
@@ -139,6 +185,48 @@ class TestStaleReplyDiscard(unittest.TestCase):
             time.sleep(0.7)  # let the late 'ok' arrive and sit in the queue
             # Must get the real battery value, not the stale takeoff 'ok'.
             self.assertEqual(drone.send_command("battery?", timeout=1), "87")
+        finally:
+            drone.close()
+            fake.close()
+
+    def test_cross_send_late_reply_is_not_misattributed(self):
+        """The harder case: without the post-timeout quarantine, takeoff's late
+        'ok' would land AFTER the next command's send time and be matched as
+        its reply. The quarantine delays the next send past the late arrival,
+        so the timestamp check discards it as stale."""
+        fake = FakeDrone(replies={
+            "takeoff": ("ok", 0.6),
+            "battery?": "87",
+        })
+        drone = make_tello(fake)
+        try:
+            with self.assertRaises(TelloError):
+                drone.send_command("takeoff", timeout=0.2)
+            # Called immediately — takeoff's 'ok' is still in flight.
+            self.assertEqual(drone.send_command("battery?", timeout=2), "87")
+        finally:
+            drone.close()
+            fake.close()
+
+
+class TestStateReceiverResilience(unittest.TestCase):
+    def test_binary_state_packet_does_not_kill_the_thread(self):
+        """One corrupt datagram on the state port must not raise
+        UnicodeDecodeError and silently end telemetry for the session."""
+        fake = FakeDrone()
+        drone = make_tello(fake)
+        try:
+            drone.connect(retries=1)  # starts the state receiver thread
+            port = drone._state_socket.getsockname()[1]
+            tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            tx.sendto(b"\xff\xfe\x00garbage\xaa", ("127.0.0.1", port))
+            time.sleep(0.2)
+            tx.sendto(b"bat:87;h:0;", ("127.0.0.1", port))  # thread must still parse
+            tx.close()
+            deadline = time.time() + 2
+            while time.time() < deadline and drone.state.get("bat") != 87:
+                time.sleep(0.05)
+            self.assertEqual(drone.state.get("bat"), 87)
         finally:
             drone.close()
             fake.close()

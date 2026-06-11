@@ -68,8 +68,12 @@ shell, always `close()`).
 - Fire-and-forget commands (`send_rc`, `emergency`) bypass the
   request/response path — they `sendto` directly with **no** wait, because the
   drone does not reply to them.
-- The Tello **auto-lands after 15 s** of silence (`SAFETY_TIMEOUT`). Any
-  long-running control loop must keep sending commands.
+- The Tello **auto-lands after 15 s** of silence (`SAFETY_TIMEOUT`) and powers
+  off after a few idle minutes. `Tello.start_keepalive()` (called by drone.py
+  after connect) sends a zero `rc` when the link has been quiet for ~5 s **and
+  telemetry says the drone is on the ground (h == 0)**. The ground gate is
+  safety-critical: airborne, the heartbeat stays silent so the 15 s auto-land
+  failsafe remains armed and a pilot's rc setpoint is never overridden.
 - `Tello(ip, remote_port=…, local_port=…, state_port=…)` exists so
   `tests/test_tello.py` can run the real protocol against a fake UDP drone on
   localhost — keep addressing injectable.

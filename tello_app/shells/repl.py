@@ -38,8 +38,9 @@ Available commands (type directly):
   help             – show this help
   quit / exit      – land (if flying) and disconnect
 
-Note: the drone auto-lands after ~15s without a command. Keep sending
-commands while airborne, or run keepalive.py in a second terminal.
+Note: while AIRBORNE the drone auto-lands after ~15s without a command —
+that failsafe is deliberately left armed. While parked, drone.py keeps the
+link alive automatically, so take your time between commands on the ground.
 """
 
 

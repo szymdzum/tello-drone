@@ -104,8 +104,9 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    if args.interval >= 15:
-        print("interval must be < 15 s (the Tello auto-lands after 15 s of silence).")
+    if args.interval >= Tello.SAFETY_TIMEOUT:
+        print(f"interval must be < {Tello.SAFETY_TIMEOUT} s "
+              "(the Tello auto-lands after that long without a command).")
         sys.exit(1)
 
     print(

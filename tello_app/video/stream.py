@@ -45,14 +45,18 @@ class VideoStream:
     def _loop_av(self) -> None:
         while self._running:
             try:
-                container = av.open(AV_URL, timeout=(5, None))
-                for frame in container.decode(video=0):
-                    if not self._running:
-                        break
-                    arr = frame.to_ndarray(format="bgr24")
-                    with self._lock:
-                        self._frame = arr
-                container.close()
+                # (open, read) timeouts — without a read timeout a mid-session
+                # stall blocks decode() forever and the reopen path never runs.
+                container = av.open(AV_URL, timeout=(5.0, 5.0))
+                try:
+                    for frame in container.decode(video=0):
+                        if not self._running:
+                            break
+                        arr = frame.to_ndarray(format="bgr24")
+                        with self._lock:
+                            self._frame = arr
+                finally:
+                    container.close()
             except Exception:
                 time.sleep(1)  # stream hiccup / not up yet — reopen
 

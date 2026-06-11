@@ -159,6 +159,31 @@ class TestActionExecution(unittest.TestCase):
         self.assertEqual(fc.tick(0.0), (0, 0, 0, 0))
         self.assertEqual(drone.emergency.call_count, 3)  # burst through packet loss
 
+    def test_emergency_sets_flag_and_takeoff_rearms(self):
+        """The HUD's DISARMED overlay reads fc.emergency, not the status text —
+        the flag must survive later status updates and clear on re-takeoff."""
+        fc = FlightController()
+        fc.flying = True
+        drone = self._fake_drone()
+        fcmod._do_action(drone, fc, "emergency")
+        self.assertTrue(fc.emergency)
+        fcmod._do_action(drone, fc, "takeoff")
+        self.assertFalse(fc.emergency)
+
+    def test_landing_freezes_steering(self):
+        """While a landing is in progress, held/new movement keys must not feed
+        the rc stream — non-zero rc mid-descent can abort the landing."""
+        fc = FlightController(speed=50)
+        fc.flying = True
+        fc.handle_key(ord("w"), 0.0)  # held forward before 'g'
+        fc.landing = True             # what ActionRunner.submit('land') sets
+        self.assertEqual(fc.tick(0.0), (0, 0, 0, 0))   # zeroed immediately
+        fc.handle_key(ord("w"), 0.0)                   # key still held mid-descent
+        self.assertEqual(fc.tick(0.0), (0, 0, 0, 0))   # still frozen
+        drone = self._fake_drone()
+        fcmod._do_action(drone, fc, "land")
+        self.assertFalse(fc.landing)                   # released on touchdown
+
 
 class TestActionRunner(unittest.TestCase):
     """The worker thread that keeps the control loop non-blocking."""
@@ -212,6 +237,24 @@ class TestActionRunner(unittest.TestCase):
         sent = [c.args[0] for c in drone.send_command.call_args_list]
         self.assertIn("land", sent)
         drone.flip.assert_not_called()
+
+    def test_executing_land_blocks_queued_takeoff(self):
+        """The relaunch bug: once the worker has POPPED land (pending is empty
+        again), a stray 't' must not queue a takeoff that fires on touchdown."""
+        release = threading.Event()
+        drone = self._slow_drone(release)
+        fc = FlightController()
+        fc.flying = True
+        runner = fcmod.ActionRunner(drone, fc)
+        runner.submit("land")             # worker pops it and blocks in 'land'
+        time.sleep(0.1)
+        self.assertEqual(runner.busy_with, "land")
+        runner.submit("takeoff")          # stray key mid-descent — must be dropped
+        release.set()
+        self._wait_idle(runner)
+        sent = [c.args[0] for c in drone.send_command.call_args_list]
+        self.assertNotIn("takeoff", sent)
+        self.assertFalse(fc.flying)       # landed, and it STAYED landed
 
     def test_emergency_runs_inline_even_while_worker_blocked(self):
         release = threading.Event()

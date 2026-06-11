@@ -56,12 +56,16 @@ class FlightController:
         self.vel = {"lr": 0, "fb": 0, "ud": 0, "yaw": 0}
         self._last = {"lr": 0.0, "fb": 0.0, "ud": 0.0, "yaw": 0.0}
         self.flying = False
+        self.landing = False    # a commanded landing is in progress: steering frozen
+        self.emergency = False  # motors were cut; cleared by the next takeoff
 
     def handle_key(self, key: int, now: float) -> str | None:
         """Process one key. Returns a discrete action string (takeoff/land/flip/
         emergency/quit) for the shell to execute, or None for movement and
         local-only keys (hover, speed)."""
         if key in self.moves:
+            if self.landing:
+                return None  # no steering during a commanded landing
             axis, sign = self.moves[key]
             self.vel[axis] = sign * self.speed
             self._last[axis] = now
@@ -85,7 +89,11 @@ class FlightController:
 
     def tick(self, now: float) -> tuple[int, int, int, int]:
         """Decay any axis whose key hasn't been refreshed within HOLD_S, then
-        return the (lr, fb, ud, yaw) velocities to stream."""
+        return the (lr, fb, ud, yaw) velocities to stream. Forced to zero
+        while landing — non-zero rc mid-descent can abort the landing."""
+        if self.landing:
+            self.hover()
+            return (0, 0, 0, 0)
         for axis, v in self.vel.items():
             if v and now - self._last[axis] > HOLD_S:
                 self.vel[axis] = 0
@@ -118,16 +126,19 @@ def _do_action(drone: Tello, fc: FlightController, action: str) -> str:
             return "already airborne"
         fc.hover()  # so a held key can't fling it the instant it lifts
         fc.flying = True  # assume airborne even if the ok reply is lost
+        fc.emergency = False  # a new takeoff re-arms after a motor cut
         try:
             drone.send_command("takeoff", timeout=7)
             return "airborne"
         except TelloError:
             return "takeoff unconfirmed — assuming airborne; land with g"
     if action == "land":
+        fc.landing = True  # also set here for direct callers (FPV quit path)
+        fc.hover()
         drone.send_rc(0, 0, 0, 0)
         landed = _try_land(drone)
         fc.flying = False
-        fc.hover()
+        fc.landing = False
         return "landed" if landed else "land sent — verify the drone is down"
     if action == "flip":
         if not fc.flying:
@@ -141,9 +152,11 @@ def _do_action(drone: Tello, fc: FlightController, action: str) -> str:
         for _ in range(3):  # burst — emergency packets get dropped on a busy link
             try:
                 drone.emergency()
-            except TelloError:
-                pass
+            except OSError:  # raw sendto: only the socket can fail (e.g. closing)
+                break
         fc.flying = False
+        fc.landing = False
+        fc.emergency = True
         fc.hover()
         return "EMERGENCY STOP"
     return ""
@@ -155,8 +168,9 @@ class ActionRunner:
     while a command waits up to 7 s for its (possibly lost) reply. This is the
     fix for the FPV crash: a blocked loop meant no rc, no HUD, no emergency.
 
-    One pending slot, latest-wins — except a pending 'land' is sticky (only
-    another land may replace it; a stray key must not cancel a landing).
+    One pending slot, latest-wins — except 'land' is sticky while pending OR
+    executing (only another land gets through; a stray key must not cancel a
+    landing, nor queue a takeoff that would relaunch the drone on touchdown).
     'emergency' never queues: it is fire-and-forget, so it runs inline."""
 
     def __init__(self, drone: Tello, fc: FlightController) -> None:
@@ -176,8 +190,11 @@ class ActionRunner:
             self.last_result = _do_action(self._drone, self._fc, action)
             return
         with self._lock:
-            if self._pending == "land" and action != "land":
-                return  # don't let a stray key cancel a requested landing
+            landing = self._pending == "land" or self.busy_with == "land"
+            if landing and action != "land":
+                return  # a stray key must not cancel (or queue behind) a landing
+            if action == "land":
+                self._fc.landing = True  # freeze steering now, not when the worker gets to it
             self._pending = action
             self._wake.set()
 

@@ -35,6 +35,9 @@ class Tello:
 
     RESPONSE_TIMEOUT: int = 10  # seconds (overridable per instance, e.g. keepalive)
     SAFETY_TIMEOUT: int = 15  # seconds – Tello auto-lands if no command received
+    # Hold the next command this long after a timeout, so a late reply lands
+    # before the next send and is discarded as stale (cross-send desync).
+    REPLY_QUARANTINE: float = 1.5
 
     def __init__(self, ip: str | None = None, *,
                  remote_port: int | None = None,
@@ -64,7 +67,10 @@ class Tello:
         self._responses: queue.Queue[tuple[float, str]] = queue.Queue()
         self._running = True
         self._connected = False
+        self._last_tx = time.monotonic()  # when anything was last sent to the drone
+        self._quarantine_until = 0.0  # don't send before this (see send_command)
         self._state_thread: threading.Thread | None = None
+        self._keepalive_thread: threading.Thread | None = None
         # Receiver runs from construction: send_command never touches recvfrom.
         self._response_thread = threading.Thread(target=self._response_receiver, daemon=True)
         self._response_thread.start()
@@ -96,6 +102,27 @@ class Tello:
                 time.sleep(1)
 
         raise TelloError("Failed to enter SDK mode after all retries")
+
+    def start_keepalive(self, interval: float = 5.0) -> None:
+        """Keep a PARKED drone from idle-powering-off: send a zero `rc` when
+        the link has been quiet for `interval` s AND telemetry says height 0.
+        Ground-gated on purpose — airborne, the 15 s auto-land failsafe must
+        stay armed and pilot rc setpoints must not be overridden."""
+        if self._keepalive_thread is not None:
+            return
+
+        def _loop() -> None:
+            while self._running:
+                quiet = time.monotonic() - self._last_tx > interval
+                if self._connected and quiet and self.state.get("h", -1) == 0:
+                    try:
+                        self.send_rc(0, 0, 0, 0)
+                    except OSError:
+                        break  # socket closed mid-send during shutdown
+                time.sleep(0.5)
+
+        self._keepalive_thread = threading.Thread(target=_loop, daemon=True)
+        self._keepalive_thread.start()
 
     def close(self) -> None:
         """Shut down sockets and background threads."""
@@ -135,21 +162,28 @@ class Tello:
         time — anything received before this send is a stale leftover."""
         timeout = timeout or self.RESPONSE_TIMEOUT
         with self._cmd_lock:
+            # A timed-out command's reply may still be in flight; wait it out
+            # so the timestamp check discards it instead of matching it to us.
+            delay = self._quarantine_until - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
             sent_at = time.monotonic()
             self._cmd_socket.sendto(command.encode("utf-8"), self._tello_addr)
+            self._last_tx = sent_at
             deadline = sent_at + timeout
             while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TelloError(f"Timed out waiting for response to '{command}'")
                 try:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise queue.Empty
                     received_at, response = self._responses.get(timeout=remaining)
                 except queue.Empty:
+                    self._quarantine_until = time.monotonic() + self.REPLY_QUARANTINE
                     raise TelloError(
                         f"Timed out waiting for response to '{command}'") from None
                 if received_at >= sent_at:
                     break
-                # else: stale reply to an earlier (timed-out) command — drop it
+                # else: stale reply that arrived before this send — drop it
 
         if response.lower().startswith("error"):
             raise TelloError(f"Command '{command}' failed: {response}")
@@ -167,6 +201,7 @@ class Tello:
         """
         cmd = f"rc {lr} {fb} {ud} {yaw}"
         self._cmd_socket.sendto(cmd.encode("utf-8"), self._tello_addr)
+        self._last_tx = time.monotonic()
 
     # ── Control commands ────────────────────────────────────────
 
@@ -181,6 +216,7 @@ class Tello:
     def emergency(self) -> None:
         """Kill motors immediately – drone will drop!"""
         self._cmd_socket.sendto(b"emergency", self._tello_addr)
+        self._last_tx = time.monotonic()
         print("🛑 EMERGENCY STOP")
 
     def stop(self) -> str:
@@ -286,7 +322,8 @@ class Tello:
         while self._running:
             try:
                 data, _ = self._state_socket.recvfrom(1518)
-                raw = data.decode("utf-8").strip()
+                # replace, not strict: a corrupt datagram must not kill the thread
+                raw = data.decode("utf-8", errors="replace").strip()
                 parsed = self._parse_state(raw)
                 with self._state_lock:
                     self._state = parsed

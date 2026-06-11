@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tello_app.flight.controller import FlightController  # noqa: E402
-from tello_app.shells import fpv  # noqa: E402
+from tello_app.shells import fpv, hud_render  # noqa: E402
 
 
 class TestVideoBackend(unittest.TestCase):
@@ -56,20 +56,47 @@ class TestUnifiedScheme(unittest.TestCase):
 
 
 class TestOverlayRender(unittest.TestCase):
-    def test_draw_overlay_renders_without_error(self):
+    """The arcade HUD must render every state variant without crashing,
+    including before any telemetry has arrived (all-None snapshot values)."""
+
+    def _frame(self):
         import numpy as np
+        return np.zeros((720, 960, 3), dtype=np.uint8)
+
+    def _render(self, state, flying=False, status="", rc=(0, 0, 0, 0), emergency=False):
         drone = MagicMock()
-        drone.state = {"bat": 92, "h": 0}
-        frame = np.zeros((360, 480, 3), dtype=np.uint8)
-        fpv._draw_overlay(frame, drone, FlightController(), "press 't' to take off",
-                          (0, 0, 0, 0))
+        drone.state = state
+        fc = FlightController()
+        fc.flying = flying
+        fc.emergency = emergency
+        frame = self._frame()
+        fpv._draw_overlay(frame, drone, fc, status, rc)
         self.assertTrue(frame.any())  # something was drawn onto the black frame
+        return frame
+
+    def test_normal_flight(self):
+        self._render({"bat": 68, "h": 132, "tof": 72, "temph": 37, "time": 84,
+                      "pitch": 5, "roll": -3, "yaw": 124, "vgx": 4, "vgy": 3, "vgz": 0},
+                     flying=True, status="airborne", rc=(20, -40, 60, -80))
+
+    def test_no_telemetry_yet(self):
+        self._render({})  # every snapshot value None / level attitude
+
+    def test_low_battery_and_emergency_variants(self):
+        self._render({"bat": 14}, flying=True, status="battery low")
+        # Emergency is a controller flag, not a status-string parse.
+        self._render({"bat": 14}, status="EMERGENCY STOP", emergency=True)
+
+    def test_connecting_screen(self):
+        frame = self._frame()
+        hud_render.draw_connecting(frame)
+        self.assertTrue(frame.any())
 
     def test_battery_color_thresholds(self):
-        self.assertEqual(fpv._battery_color(92), fpv.GREEN)
-        self.assertEqual(fpv._battery_color(50), fpv.AMBER)
-        self.assertEqual(fpv._battery_color(15), fpv.RED)
-        self.assertEqual(fpv._battery_color(None), fpv.GREY)  # no telemetry yet
+        self.assertEqual(hud_render._battery_color(92), hud_render.OK)
+        self.assertEqual(hud_render._battery_color(50), hud_render.WARN)
+        self.assertEqual(hud_render._battery_color(15), hud_render.DANGER)
+        self.assertEqual(hud_render._battery_color(None), hud_render.TEXT2)  # no data yet
 
 
 if __name__ == "__main__":
