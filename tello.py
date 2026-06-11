@@ -15,6 +15,7 @@ Usage:
     drone.close()
 """
 
+import queue
 import socket
 import threading
 import time
@@ -32,41 +33,54 @@ class Tello:
     STATE_PORT = 8890
     VIDEO_PORT = 11111
 
-    RESPONSE_TIMEOUT = 10  # seconds
-    SAFETY_TIMEOUT = 15  # seconds – Tello auto-lands if no command received
+    RESPONSE_TIMEOUT: int = 10  # seconds (overridable per instance, e.g. keepalive)
+    SAFETY_TIMEOUT: int = 15  # seconds – Tello auto-lands if no command received
 
-    def __init__(self) -> None:
+    def __init__(self, ip: str | None = None, *,
+                 remote_port: int | None = None,
+                 local_port: int | None = None,
+                 state_port: int | None = None) -> None:
+        """Defaults talk to a real Tello. All addressing is overridable so tests
+        can run the full protocol against a fake drone on localhost."""
+        self._tello_addr = (ip if ip is not None else self.TELLO_IP,
+                            remote_port if remote_port is not None else self.COMMAND_PORT)
+
         # Command socket (send + receive responses)
         self._cmd_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._cmd_socket.bind(("", self.COMMAND_PORT))
-        self._cmd_socket.settimeout(self.RESPONSE_TIMEOUT)
+        self._cmd_socket.bind(("", local_port if local_port is not None else self.COMMAND_PORT))
+        # Short poll so the receiver thread notices shutdown quickly; the actual
+        # per-command timeout is enforced in send_command via the queue.
+        self._cmd_socket.settimeout(0.5)
 
         # State socket (receive telemetry)
         self._state_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._state_socket.bind(("", self.STATE_PORT))
+        self._state_socket.bind(("", state_port if state_port is not None else self.STATE_PORT))
         self._state_socket.settimeout(3)
 
-        self._tello_addr = (self.TELLO_IP, self.COMMAND_PORT)
         self._state: dict[str, str | int | float] = {}
         self._state_lock = threading.Lock()
-        self._running = False
+        self._cmd_lock = threading.Lock()  # serializes in-flight commands across threads
+        # Every datagram from the drone's command port, tagged with arrival time.
+        self._responses: queue.Queue[tuple[float, str]] = queue.Queue()
+        self._running = True
         self._connected = False
         self._state_thread: threading.Thread | None = None
+        # Receiver runs from construction: send_command never touches recvfrom.
+        self._response_thread = threading.Thread(target=self._response_receiver, daemon=True)
+        self._response_thread.start()
 
     # ── Connection ──────────────────────────────────────────────
 
     def connect(self, retries: int = 3) -> str:
-        """Enter SDK mode and start the state receiver thread."""
-        self._running = True
-        self._state_thread = threading.Thread(target=self._state_receiver, daemon=True)
-        self._state_thread.start()
+        """Enter SDK mode and start the state receiver thread.
+
+        Stale replies the drone buffered from an earlier session are harmless:
+        send_command discards anything received before its own send time."""
+        if self._state_thread is None:
+            self._state_thread = threading.Thread(target=self._state_receiver, daemon=True)
+            self._state_thread.start()
 
         for attempt in range(1, retries + 1):
-            # Flush any stale packets sitting in the command socket buffer
-            self._flush_socket(self._cmd_socket)
-            time.sleep(0.5)
-            self._flush_socket(self._cmd_socket)
-
             try:
                 response = self.send_command("command")
                 if "ok" in response.lower():
@@ -93,30 +107,44 @@ class Tello:
 
     # ── Raw command interface ───────────────────────────────────
 
-    @staticmethod
-    def _flush_socket(sock: socket.socket) -> None:
-        """Drain any buffered packets from a socket."""
-        original_timeout = sock.gettimeout()
-        sock.settimeout(0.01)
-        while True:
+    def _response_receiver(self) -> None:
+        """Background thread: drain command-channel replies into a timestamped
+        queue. send_command pops from it and discards anything that arrived
+        before its own send — so a late reply to a timed-out command can never
+        be mistaken for the answer to the next one (response desync)."""
+        while self._running:
             try:
-                sock.recvfrom(1518)
-            except (TimeoutError, BlockingIOError, OSError):
+                data, _ = self._cmd_socket.recvfrom(1518)
+            except TimeoutError:
+                continue
+            except OSError:
                 break
-        sock.settimeout(original_timeout)
+            text = data.decode("utf-8", errors="replace").strip()
+            self._responses.put((time.monotonic(), text))
 
     def send_command(self, command: str, timeout: float | None = None) -> str:
-        """Send a text command and wait for the response string."""
+        """Send a text command and wait for the response string.
+
+        Thread-safe: _cmd_lock serializes in-flight commands (e.g. a controller's
+        worker thread vs. the main thread), and replies are matched by arrival
+        time — anything received before this send is a stale leftover."""
         timeout = timeout or self.RESPONSE_TIMEOUT
-        self._cmd_socket.settimeout(timeout)
-
-        self._cmd_socket.sendto(command.encode("utf-8"), self._tello_addr)
-
-        try:
-            data, _ = self._cmd_socket.recvfrom(1518)
-            response = data.decode("utf-8", errors="replace").strip()
-        except TimeoutError as e:
-            raise TelloError(f"Timed out waiting for response to '{command}'") from e
+        with self._cmd_lock:
+            sent_at = time.monotonic()
+            self._cmd_socket.sendto(command.encode("utf-8"), self._tello_addr)
+            deadline = sent_at + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TelloError(f"Timed out waiting for response to '{command}'")
+                try:
+                    received_at, response = self._responses.get(timeout=remaining)
+                except queue.Empty:
+                    raise TelloError(
+                        f"Timed out waiting for response to '{command}'") from None
+                if received_at >= sent_at:
+                    break
+                # else: stale reply to an earlier (timed-out) command — drop it
 
         if response.lower().startswith("error"):
             raise TelloError(f"Command '{command}' failed: {response}")
@@ -233,6 +261,12 @@ class Tello:
 
     def stream_off(self) -> str:
         return self.send_command("streamoff")
+
+    @property
+    def connected(self) -> bool:
+        """True once SDK mode has been entered (used to skip cleanup commands
+        when a run is aborted before the drone ever answered)."""
+        return self._connected
 
     # ── State (telemetry) ───────────────────────────────────────
 

@@ -35,7 +35,50 @@ python main.py --demo
 ```
 Takes off, flies a 50cm square, and lands.
 
+### Keyboard control (live flight)
+```bash
+python keyboard_control.py
+```
+Real-time `rc` flight from the keyboard (stdlib `curses`, no extra deps):
+
+| Keys | Action |
+|---|---|
+| `W` / `S` · `A` / `D` | forward / back · left / right |
+| `↑` / `↓` · `←` / `→` | up / down · yaw left / right |
+| `t` / `l` / `f` | takeoff / land / flip |
+| `x` · `-` / `=` | hover · slower / faster |
+| **SPACE** | **EMERGENCY stop (drone drops!)** · `q` quits (lands first) |
+
+Hold a key to move; release and that axis coasts to a hover within ~0.5 s. Tune
+`HOLD_S` / `RATE_S` at the top of the script.
+
+### FPV (keyboard flight + live video)
+```bash
+python fpv.py     # needs opencv-python (cv2) + numpy
+```
+Same real-time flight, now with the camera feed and a HUD overlay. OpenCV both
+shows the video and reads the keys, so **click the video window to give it focus**
+before flying. Twin-stick (Mode-2) layout — one hand per cluster:
+
+| Left hand (WASD) | Right hand (IJKL) |
+|---|---|
+| `W` / `S` up / down (throttle) | `I` / `K` forward / back |
+| `A` / `D` yaw left / right | `J` / `L` strafe left / right |
+
+`t` takeoff · `g` land · `f` flip · `h` hover · `-`/`=` speed · **SPACE** emergency · **Esc** quit.
+
+Video decodes on a background thread (PyAV if `av` is installed — lower latency —
+else OpenCV/FFMPEG), latest-frame-wins, so it can never stall the controls.
+Takeoff/land/flip run on a worker thread, so the rc stream and HUD never freeze
+while waiting for a (possibly lost) reply. Before flying on a Mac, consider
+`sudo ifconfig awdl0 down` (see Troubleshooting → Link quality).
+
 ## Repair & Testing Checklist
+
+> **Historical record.** This documents the repair of the *original* drone, now
+> permanently grounded (power-rail fault). The flight unit is a working
+> replacement. Kept for reference; the `diagnostic.py` / `motor_debug.py` scripts
+> it once referenced have been removed (recover from git history if needed).
 
 ### Phase 1 — Charge
 - [ ] Power off the drone (hold power button until LED goes dark)
@@ -110,13 +153,12 @@ You can splice wire-to-wire without touching the board.
   ```bash
   ping -c 3 192.168.10.1
   ```
-- [ ] Run diagnostic:
+- [ ] Start the controller and query sensors in the REPL:
   ```bash
-  python diagnostic.py
+  python main.py
   ```
-- [ ] Confirm: battery > 50%
-- [ ] Confirm: IMU readings normal (pitch/roll/yaw near 0 at rest)
-- [ ] Confirm: telemetry state data is streaming
+  - `battery?` → confirm > 50%
+  - `state` → IMU (pitch/roll/yaw) near 0 at rest, telemetry streaming
 
 ### Phase 4 — Motor Test
 - [ ] Place drone on a flat surface, clear area around it
@@ -147,6 +189,30 @@ You can splice wire-to-wire without touching the board.
 - **Timeout on commands** → check Wi-Fi connection, re-run `ping`
 - **"unactive" response to `command`** → update firmware via Tello mobile app
 
+### Link quality & video (lessons learned the hard way)
+- **macOS AWDL (AirDrop/AirPlay) stalls the Wi-Fi radio ~every second** — a top
+  cause of lost replies/laggy rc on a Mac. Fix for the session:
+  `sudo ifconfig awdl0 down` (macOS re-enables it later; re-run if the link
+  degrades). Turning Bluetooth off and AirDrop to "No One" also helps.
+  One-time setup so the flight scripts take it down automatically (no password):
+  ```bash
+  echo "$USER ALL=(ALL) NOPASSWD: /sbin/ifconfig awdl0 down" | sudo tee /etc/sudoers.d/awdl
+  ```
+- **`objc: Class AVFFrameReceiver is implemented in both ... cv2 ... and ... av ...`**
+  at startup is benign noise: opencv-python and PyAV each bundle their own FFmpeg
+  dylibs. Decoding still works; ignore it.
+- **`non-existing PPS 0 referenced` / `no frame!` at video startup is normal** —
+  the decoder is waiting for the first keyframe. Ignore it.
+- **`error while decoding MB x y` during flight = real packet loss** — the link
+  is congested or noisy. Get closer, kill AWDL, avoid crowded 2.4 GHz.
+- **Hovering drone drifts at `rc 0 0 0 0`** → that's the vision positioning
+  system (VPS) losing the floor, not a control bug. Fly over a *textured* floor
+  in good light; plain/glossy floors and dim rooms cause drift.
+- **The official app is smoother than the SDK and that's expected** — it speaks a
+  different binary protocol (50 Hz un-acked stick packets, keyframe re-requests).
+  The text SDK can still fly + stream reliably if the control loop never blocks
+  (see `keyboard_control.py` / `fpv.py` architecture).
+
 ## Project Structure
 
 ```
@@ -156,11 +222,9 @@ tello-drone/
 │
 │  # ── Control / entry points ──
 ├── main.py           # Interactive REPL + scripted demo flight
+├── keyboard_control.py # Live keyboard flight (curses, real-time rc)
+├── fpv.py            # Keyboard flight + live video overlay (cv2; WASD+IJKL)
 ├── keepalive.py      # Hold a session open so the drone doesn't idle-power-off
-│
-│  # ── Diagnostics / repair ──
-├── diagnostic.py     # Query all sensors + attempt SDK 3.0 motor test
-├── motor_debug.py    # Take off + sample IMU tilt to locate a dead motor
 │
 │  # ── Vision ──
 ├── video_stream.py   # Live H.264 video + OpenCV face detection (needs cv2)
@@ -171,7 +235,9 @@ tello-drone/
 │   ├── ALTERNATIVES.md  # Alternative approaches / platforms
 │   └── FLIX-BUILD.md    # Flix flight-controller build notes
 │
+├── tests/            # Hardware-free unit tests (mock the Tello class)
 ├── captures/         # Stills saved by video_stream.py (gitignored)
+├── pyproject.toml    # ruff + basedpyright config
 ├── README.md
 └── CLAUDE.md         # Guidance for Claude Code
 ```

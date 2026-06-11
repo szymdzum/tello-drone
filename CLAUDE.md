@@ -5,13 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A from-scratch controller for a Ryze/DJI Tello drone, talking to the Tello SDK
-directly over raw UDP sockets. The core (`tello.py`, `main.py`, `diagnostic.py`,
-`motor_debug.py`) is **stdlib-only — no pip install needed**. Only
-`video_stream.py` pulls in an external dependency (OpenCV).
+directly over raw UDP sockets. The core (`tello.py`, `main.py`, `keepalive.py`)
+is **stdlib-only — no pip install needed**. Only `video_stream.py` pulls in an
+external dependency (OpenCV).
 
-This project doubles as a repair log: the physical drone has a faulty motor, and
-several scripts plus `README.md` exist to diagnose and verify it. See "Hardware
-context" below.
+`README.md` also keeps a *historical* repair log: the original drone had a
+disconnected motor and is now permanently grounded (power-rail fault); a working
+replacement is the flight unit. The repair/diagnostic scripts have been removed
+(see git history). See "Hardware context" below.
 
 ## Running
 
@@ -27,8 +28,8 @@ they mock the `Tello` class — no drone needed): `python -m unittest discover -
 ```bash
 python main.py            # interactive REPL — type raw SDK commands
 python main.py --demo     # scripted square flight (takeoff → 50cm square → land)
-python diagnostic.py      # query all sensors + attempt SDK 3.0 motor spin test
-python motor_debug.py     # takeoff + sample IMU tilt to locate a dead motor
+python keyboard_control.py # live keyboard flight (curses; WASD + arrows, real-time rc)
+python fpv.py             # keyboard flight WITH live video (cv2; WASD+IJKL twin-stick)
 python video_stream.py    # live H.264 video + OpenCV face detection (needs cv2)
 ```
 
@@ -40,7 +41,8 @@ Verifying connectivity before a run: `ping -c 3 192.168.10.1`.
 ## Architecture
 
 Everything is built on the `Tello` class in `tello.py` — the single source of
-truth for the protocol. The three other scripts are thin front-ends over it.
+truth for the protocol. The other scripts (`main.py`, `keepalive.py`,
+`video_stream.py`) are thin front-ends over it.
 
 **Three UDP channels** (all opened in `Tello.__init__`):
 - Command — send to `192.168.10.1:8889`, block for a text response. This is
@@ -53,9 +55,11 @@ truth for the protocol. The three other scripts are thin front-ends over it.
   FFMPEG backend, not through the `Tello` class.
 
 **Key protocol details to preserve when editing `tello.py`:**
-- `connect()` enters SDK mode by sending `command` (with retries), and *flushes
-  stale packets* from the command socket first — the Tello buffers old replies,
-  so skipping the flush causes responses to desync from requests.
+- Command replies are drained by a dedicated **response-receiver thread** into a
+  timestamped queue; `send_command()` (serialized by `_cmd_lock`, thread-safe)
+  discards any reply that arrived *before* its own send. This is what prevents a
+  late reply to a timed-out command from desyncing the next request — never
+  revert to inline `recvfrom`.
 - `send_command()` raises `TelloError` on any response starting with `error`.
   Read commands (`battery?`, etc.) return the raw string; helpers like
   `get_battery()` cast it.
@@ -64,24 +68,32 @@ truth for the protocol. The three other scripts are thin front-ends over it.
   drone does not reply to them.
 - The Tello **auto-lands after 15 s** of silence (`SAFETY_TIMEOUT`). Any
   long-running control loop must keep sending commands.
+- `Tello(ip, remote_port=…, local_port=…, state_port=…)` exists so
+  `tests/test_tello.py` can run the real protocol against a fake UDP drone on
+  localhost — keep addressing injectable.
+
+**Live controllers** (`keyboard_control.py`, `fpv.py`) share `FlightController`
+(pure key→velocity logic) and `ActionRunner` (worker thread for takeoff/land/flip
+so the rc stream and UI never block; pending-slot with sticky `land`; `emergency`
+runs inline). Lessons from a real crash: takeoff must set `flying=True` even if
+the `ok` reply is lost, and nothing in the control loop may block. `fpv.py`
+decodes video with PyAV when `av` is installed (lower latency), else falls back
+to cv2's FFMPEG capture; either way decode runs on its own thread,
+latest-frame-wins. On macOS, **AWDL (AirDrop) stalls the Wi-Fi radio ~every
+second** — both controllers warn at startup; fix is `sudo ifconfig awdl0 down`.
 
 `main.py` tracks `flying` state locally to decide whether to auto-land on quit —
 the drone itself isn't queried for this.
 
-## Hardware context (repair project)
+## Hardware context (historical repair log)
 
-The README's repair checklist and `motor_debug.py` exist because this specific
-drone has a disconnected motor. Two scripts diagnose it:
-- `diagnostic.py` tries `motoron`/`motoroff` (SDK 3.0, **Tello EDU/RMTT only** —
-  a standard Tello returns `error`/`unknown command`, which the script handles).
-- `motor_debug.py` takes off, samples `pitch`/`roll` from telemetry, and infers
-  the dead motor from tilt direction (the drone tips *toward* the dead corner).
-
-**Watch out — motor numbering is inconsistent across files.** `README.md` uses
-**M0–M3** (M0 = rear-left CCW = the diagnosed faulty motor). `motor_debug.py`
-uses **M1–M4** (M1 = front-left). They describe the same physical layout with
-different labels; reconcile against the README diagram, which is the canonical
-one, when touching motor code.
+The repair phase is **concluded**. The original unit has a disconnected motor
+(rear-left, CCW) plus a power-rail fault and is permanently grounded; a working
+replacement Tello is now the flight unit. The teardown, motor layout (`M0–M3`,
+M0 = rear-left), wire-color polarity, and soldering steps live in `README.md`'s
+"Repair & Testing Checklist" — kept as a record, not active work. The former
+`diagnostic.py` / `motor_debug.py` scripts have been removed; recover them from
+git history if the original is ever revived.
 
 ## Reference docs (not code)
 
