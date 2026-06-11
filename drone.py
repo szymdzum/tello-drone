@@ -6,14 +6,15 @@ drone.py — the single entry point for flying the Tello.
     python drone.py repl    # raw SDK REPL for protocol debugging (stdlib only)
     python drone.py demo    # scripted square flight (stdlib only)
 
-Connect your machine to the Tello Wi-Fi (TELLO-XXXXXX) first. FPV needs
-opencv-python (+ optionally `av` for lower-latency decode); repl/demo run on
-the stdlib alone.
+If the machine isn't already on the Tello's Wi-Fi, drone.py joins the AP
+automatically when it's broadcasting (--ssid to override, empty to disable).
+FPV needs opencv-python (+ optionally `av` for lower-latency decode); repl/demo
+run on the stdlib alone.
 """
 import argparse
 
 from tello_app.tello import Tello, TelloError
-from tello_app.util import warn_if_awdl_active
+from tello_app.util import DEFAULT_SSID, ensure_on_tello, warn_if_awdl_active
 
 
 def main() -> None:
@@ -21,7 +22,11 @@ def main() -> None:
     ap.add_argument("mode", nargs="?", choices=("fpv", "repl", "demo"), default="fpv",
                     help="fpv = video + keyboard flight (default); "
                          "repl = raw SDK commands; demo = scripted square")
-    mode = ap.parse_args().mode
+    ap.add_argument("--ssid", default=DEFAULT_SSID,
+                    help=f"Tello Wi-Fi to auto-join when not already on it "
+                         f"(default {DEFAULT_SSID}; empty to disable)")
+    args = ap.parse_args()
+    mode = args.mode
 
     # Import the shell before touching the network so a missing cv2 fails fast,
     # and lazily so repl/demo stay stdlib-only.
@@ -33,7 +38,10 @@ def main() -> None:
         run = repl.run_demo if mode == "demo" else repl.run_interactive
 
     warn_if_awdl_active()
-    print("Connecting to Tello (be on its Wi-Fi)...")
+    if not ensure_on_tello(args.ssid):
+        print(f"Couldn't join {args.ssid or 'the Tello Wi-Fi'} — drone powered on? "
+              "Trying to connect anyway...")
+    print("Connecting to Tello...")
     drone = Tello()
     try:
         drone.connect(retries=3)

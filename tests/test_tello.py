@@ -55,7 +55,8 @@ class FakeDrone:
             reply, delay = entry if isinstance(entry, tuple) else (entry, 0.0)
             if delay:
                 time.sleep(delay)
-            self.sock.sendto(reply.encode("utf-8"), addr)
+            payload = reply if isinstance(reply, bytes) else reply.encode("utf-8")
+            self.sock.sendto(payload, addr)
 
     def close(self) -> None:
         self._running = False
@@ -100,6 +101,26 @@ class TestProtocol(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 0.05)  # never waits
         time.sleep(0.3)
         self.assertIn("rc 0 0 50 0", self.fake.received)
+
+
+class TestBinaryPacketDiscard(unittest.TestCase):
+    """The Tello also speaks its old binary protocol on the command port (boot
+    banners, DJI_LOG spam). Those datagrams must never be matched as the reply
+    to an SDK command."""
+
+    def test_binary_junk_is_not_a_reply(self):
+        junk = b"\xcc\x88\x00BUILD May  7 2019\x00DJI_LOG_V3\xaa"
+        fake = FakeDrone(replies={"command": junk, "battery?": "87"})
+        drone = make_tello(fake)
+        try:
+            # The only "reply" to 'command' is binary junk -> dropped -> timeout,
+            # NOT returned as a garbled response string.
+            with self.assertRaises(TelloError):
+                drone.send_command("command", timeout=0.5)
+            self.assertEqual(drone.send_command("battery?", timeout=1), "87")
+        finally:
+            drone.close()
+            fake.close()
 
 
 class TestStaleReplyDiscard(unittest.TestCase):

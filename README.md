@@ -7,8 +7,8 @@ for lower-latency video decode).
 ## Quick Start
 
 1. **Power on** the Tello (press side button)
-2. **Connect your Mac** to the Tello Wi-Fi network (`TELLO-XXXXXX`, no password)
-3. **Fly:**
+2. **Fly** — `drone.py` auto-joins the Tello Wi-Fi if it's broadcasting
+   (`--ssid` to override the network name, empty to disable):
 
 ```bash
 python drone.py          # FPV: live video window + keyboard flight (default)

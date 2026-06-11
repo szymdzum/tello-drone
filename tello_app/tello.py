@@ -120,6 +120,11 @@ class Tello:
             except OSError:
                 break
             text = data.decode("utf-8", errors="replace").strip()
+            if not text or "�" in text or not text.isprintable():
+                # Binary packet from the drone's other (non-SDK) protocol —
+                # boot banner / DJI_LOG spam. Never a reply to an SDK command,
+                # so it must not be matched as one.
+                continue
             self._responses.put((time.monotonic(), text))
 
     def send_command(self, command: str, timeout: float | None = None) -> str:

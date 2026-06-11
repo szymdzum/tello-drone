@@ -22,54 +22,11 @@ Note: this owns the command port (8889) while running. Stop it before running
 drone.py — it sends its own commands and keeps the drone awake on its own.
 """
 import argparse
-import subprocess
 import sys
 import time
 
 from tello_app.tello import Tello, TelloError
-
-# Default Tello AP for this project's flight unit. macOS likes to roam back to
-# an internet-capable network; this lets the watchdog force en0 back here.
-DEFAULT_SSID = "TELLO-E95548"
-WIFI_IFACE = "en0"
-
-
-def _en0_ip() -> str:
-    try:
-        out = subprocess.run(
-            ["ipconfig", "getifaddr", WIFI_IFACE],
-            capture_output=True, text=True, timeout=3,
-        )
-        return out.stdout.strip()
-    except Exception:
-        return ""
-
-
-def ensure_on_tello(ssid: str, quiet: bool) -> bool:
-    """If en0 has roamed off the Tello, force it back onto the Tello AP.
-
-    Returns True once en0 holds a 192.168.10.x address. Internet is expected to
-    live on a separate (wired) interface, so taking en0 for the Tello is safe.
-    """
-    if _en0_ip().startswith("192.168.10."):
-        return True
-    if not ssid:
-        return False
-    if not quiet:
-        ts = time.strftime("%H:%M:%S")
-        print(f"[{ts}] en0 roamed off the Tello — rejoining {ssid}...", flush=True)
-    try:
-        subprocess.run(
-            ["networksetup", "-setairportnetwork", WIFI_IFACE, ssid],
-            capture_output=True, text=True, timeout=15,
-        )
-    except Exception:
-        pass
-    for _ in range(8):  # wait for association + DHCP
-        if _en0_ip().startswith("192.168.10."):
-            return True
-        time.sleep(1)
-    return _en0_ip().startswith("192.168.10.")
+from tello_app.util import DEFAULT_SSID, ensure_on_tello
 
 
 def connect_fast(ssid: str, quiet: bool) -> Tello:
