@@ -41,6 +41,9 @@ Available commands (type directly):
   state            – show latest telemetry
   help             – show this help
   quit / exit      – land (if flying) and disconnect
+
+Note: the drone auto-lands after ~15s without a command. Keep sending
+commands while airborne, or run keepalive.py in a second terminal.
 """
 
 
@@ -80,6 +83,27 @@ def run_interactive(drone: Tello) -> None:
                 print("  No state data received yet.")
             continue
 
+        # Fire-and-forget commands: the drone sends no reply, so routing these
+        # through send_command would block until timeout. Call the dedicated
+        # methods that sendto() without waiting.
+        if cmd == "emergency":
+            drone.emergency()
+            flying = False
+            continue
+
+        if cmd.split()[0] == "rc":
+            parts = cmd.split()
+            if len(parts) != 5:
+                print("  Usage: rc <lr> <fb> <ud> <yaw>  (each -100..100)")
+                continue
+            try:
+                lr, fb, ud, yaw = (int(p) for p in parts[1:])
+            except ValueError:
+                print("  rc values must be integers (-100..100)")
+                continue
+            drone.send_rc(lr, fb, ud, yaw)
+            continue
+
         # Send raw command to drone
         try:
             response = drone.send_command(cmd, timeout=20 if cmd in ("takeoff", "land") else 10)
@@ -104,17 +128,20 @@ def run_demo(drone: Tello) -> None:
         return
 
     drone.takeoff()
-    time.sleep(2)
+    # Once airborne, always attempt to land — even if a move command fails
+    # mid-square (close() only shuts sockets, it does NOT land the drone).
+    try:
+        time.sleep(2)
 
-    side = 50  # cm
-    for i in range(4):
-        print(f"  Side {i + 1}/4: forward {side}cm, rotate 90° CW")
-        drone.forward(side)
-        time.sleep(1)
-        drone.cw(90)
-        time.sleep(1)
-
-    drone.land()
+        side = 50  # cm
+        for i in range(4):
+            print(f"  Side {i + 1}/4: forward {side}cm, rotate 90° CW")
+            drone.forward(side)
+            time.sleep(1)
+            drone.cw(90)
+            time.sleep(1)
+    finally:
+        drone.land()
     print("\n── Demo complete ──")
 
 

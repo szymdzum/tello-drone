@@ -17,7 +17,12 @@ context" below.
 
 All scripts require the host machine to be connected to the Tello's Wi-Fi
 (`TELLO-XXXXXX`, no password). The drone is always at `192.168.10.1`. There is no
-build step, no test suite, and no linter configured.
+build step.
+
+Linting/typing are configured in `pyproject.toml` (ruff + basedpyright); run via
+`uvx ruff check .` and `uvx basedpyright` (prefix `UV_SYSTEM_CERTS=1` if behind a
+TLS-intercepting proxy). Hardware-free tests live in `tests/` (stdlib `unittest`,
+they mock the `Tello` class — no drone needed): `python -m unittest discover -s tests`.
 
 ```bash
 python main.py            # interactive REPL — type raw SDK commands
