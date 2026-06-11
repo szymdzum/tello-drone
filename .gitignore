@@ -12,7 +12,7 @@ __pycache__/
 .venv/
 venv/
 
-# Captured stills / video from video_stream.py
+# Captured stills / video from the FPV shell
 captures/
 
 # OS / editor

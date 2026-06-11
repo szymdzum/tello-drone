@@ -1,20 +1,16 @@
-#!/usr/bin/env python3
 """
-Interactive Tello drone controller.
+shells/repl.py — raw SDK access for protocol debugging, plus a scripted demo.
 
-Modes:
-  1. Interactive REPL – type SDK commands directly (e.g. "takeoff", "forward 50")
-  2. Demo flight      – runs a short scripted sequence
+Modes (launch via drone.py):
+  python drone.py repl  – type SDK commands directly (e.g. "takeoff", "forward 50")
+  python drone.py demo  – take off, fly a small square, land
 
-Prerequisites:
-  - Connect your Mac to the Tello Wi-Fi network (SSID: TELLO-XXXXXX)
-  - No extra pip packages required (stdlib only)
+Stdlib only — no cv2 needed.
 """
 
-import sys
 import time
 
-from tello import Tello, TelloError
+from tello_app.tello import Tello, TelloError
 
 HELP_TEXT = """
 Available commands (type directly):
@@ -143,33 +139,3 @@ def run_demo(drone: Tello) -> None:
     finally:
         drone.land()
     print("\n── Demo complete ──")
-
-
-def main() -> None:
-    mode = "interactive"
-    if len(sys.argv) > 1 and sys.argv[1] == "--demo":
-        mode = "demo"
-
-    drone = Tello()
-
-    try:
-        drone.connect()
-
-        battery = drone.get_battery()
-        print(f"Battery: {battery}%")
-
-        if mode == "demo":
-            run_demo(drone)
-        else:
-            run_interactive(drone)
-    except TelloError as e:
-        print(f"\nTello error: {e}")
-        print("Make sure you're connected to the Tello Wi-Fi network.")
-    except KeyboardInterrupt:
-        print("\nInterrupted.")
-    finally:
-        drone.close()
-
-
-if __name__ == "__main__":
-    main()

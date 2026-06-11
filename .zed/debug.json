@@ -8,19 +8,28 @@
     "console": "integratedTerminal"
   },
   {
-    "label": "main.py (REPL)",
+    "label": "drone.py (FPV)",
     "adapter": "Debugpy",
     "request": "launch",
-    "program": "$ZED_WORKTREE_ROOT/main.py",
+    "program": "$ZED_WORKTREE_ROOT/drone.py",
     "cwd": "$ZED_WORKTREE_ROOT",
     "console": "integratedTerminal"
   },
   {
-    "label": "main.py --demo (square flight)",
+    "label": "drone.py repl",
     "adapter": "Debugpy",
     "request": "launch",
-    "program": "$ZED_WORKTREE_ROOT/main.py",
-    "args": ["--demo"],
+    "program": "$ZED_WORKTREE_ROOT/drone.py",
+    "args": ["repl"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "console": "integratedTerminal"
+  },
+  {
+    "label": "drone.py demo (square flight)",
+    "adapter": "Debugpy",
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/drone.py",
+    "args": ["demo"],
     "cwd": "$ZED_WORKTREE_ROOT",
     "console": "integratedTerminal"
   }

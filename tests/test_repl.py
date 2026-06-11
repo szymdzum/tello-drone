@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Regression tests for main.py's REPL routing and demo safety.
+Regression tests for the REPL shell's command routing and demo safety.
 
 Pure stdlib (unittest + unittest.mock) — no drone, no pip deps. Run with:
     python -m unittest discover tests
-    python tests/test_main.py
+    python tests/test_repl.py
 """
 
 import io
@@ -17,15 +17,15 @@ from unittest.mock import MagicMock, patch
 # Make the project root importable when run from anywhere.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import main  # noqa: E402
-from tello import TelloError  # noqa: E402
+from tello_app.shells import repl  # noqa: E402
+from tello_app.tello import TelloError  # noqa: E402
 
 
 def feed_repl(drone, commands):
     """Drive run_interactive() with a scripted list of typed commands."""
     inputs = iter(commands)
     with redirect_stdout(io.StringIO()), patch("builtins.input", lambda _="": next(inputs)):
-        main.run_interactive(drone)
+        repl.run_interactive(drone)
 
 
 class TestReplRouting(unittest.TestCase):
@@ -66,7 +66,7 @@ class TestDemoSafety(unittest.TestCase):
         drone.get_battery.return_value = 80
         drone.forward.side_effect = TelloError("Motor stop")
         with redirect_stdout(io.StringIO()), self.assertRaises(TelloError):
-            main.run_demo(drone)
+            repl.run_demo(drone)
         self.assertTrue(drone.takeoff.called)
         self.assertTrue(drone.land.called)
 
@@ -75,7 +75,7 @@ class TestDemoSafety(unittest.TestCase):
         drone = MagicMock()
         drone.get_battery.return_value = 10
         with redirect_stdout(io.StringIO()):
-            main.run_demo(drone)
+            repl.run_demo(drone)
         self.assertFalse(drone.takeoff.called)
 
 

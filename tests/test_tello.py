@@ -17,7 +17,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tello import Tello, TelloError  # noqa: E402
+from tello_app.tello import Tello, TelloError  # noqa: E402
 
 
 class FakeDrone:

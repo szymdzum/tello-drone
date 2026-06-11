@@ -1,248 +1,88 @@
 # Tello Drone Controller
 
-Control a Ryze Tello drone via Python using raw UDP sockets (no external dependencies).
+Control a Ryze Tello drone via Python using raw UDP sockets. The protocol core
+is stdlib-only; FPV flight needs `opencv-python` + `numpy` (+ optionally `av`
+for lower-latency video decode).
 
 ## Quick Start
 
-1. **Power on** the Tello drone (press side button)
+1. **Power on** the Tello (press side button)
 2. **Connect your Mac** to the Tello Wi-Fi network (`TELLO-XXXXXX`, no password)
-3. **Run the interactive controller:**
+3. **Fly:**
 
 ```bash
-python main.py
+python drone.py          # FPV: live video window + keyboard flight (default)
+python drone.py repl     # raw SDK REPL for protocol debugging (stdlib only)
+python drone.py demo     # scripted square flight (stdlib only)
 ```
 
-## Modes
+## FPV controls
 
-### Interactive (default)
-Type SDK commands directly in the REPL:
-```
-tello> battery?
-  → 87
-tello> takeoff
-  → ok
-tello> forward 50
-  → ok
-tello> cw 90
-  → ok
-tello> land
-  → ok
-```
-
-### Demo (scripted square flight)
-```bash
-python main.py --demo
-```
-Takes off, flies a 50cm square, and lands.
-
-### Keyboard control (live flight)
-```bash
-python keyboard_control.py
-```
-Real-time `rc` flight from the keyboard (stdlib `curses`, no extra deps):
-
-| Keys | Action |
-|---|---|
-| `W` / `S` · `A` / `D` | forward / back · left / right |
-| `↑` / `↓` · `←` / `→` | up / down · yaw left / right |
-| `t` / `l` / `f` | takeoff / land / flip |
-| `x` · `-` / `=` | hover · slower / faster |
-| **SPACE** | **EMERGENCY stop (drone drops!)** · `q` quits (lands first) |
-
-Hold a key to move; release and that axis coasts to a hover within ~0.5 s. Tune
-`HOLD_S` / `RATE_S` at the top of the script.
-
-### FPV (keyboard flight + live video)
-```bash
-python fpv.py     # needs opencv-python (cv2) + numpy
-```
-Same real-time flight, now with the camera feed and a HUD overlay. OpenCV both
-shows the video and reads the keys, so **click the video window to give it focus**
-before flying. Twin-stick (Mode-2) layout — one hand per cluster:
+OpenCV both shows the video and reads the keys, so **click the video window to
+give it focus** before flying. One hand per cluster:
 
 | Left hand (WASD) | Right hand (IJKL) |
 |---|---|
-| `W` / `S` up / down (throttle) | `I` / `K` forward / back |
-| `A` / `D` yaw left / right | `J` / `L` strafe left / right |
+| `W` / `S` forward / back | `I` / `K` up / down (throttle) |
+| `A` / `D` strafe left / right | `J` / `L` yaw left / right |
 
-`t` takeoff · `g` land · `f` flip · `h` hover · `-`/`=` speed · **SPACE** emergency · **Esc** quit.
+`t` takeoff · `g` land · `f` flip · `h` hover · `y`/`u` speed · **SPACE** = **EMERGENCY stop (drone drops!)** · **Esc**/`q` quit (lands first).
 
-Video decodes on a background thread (PyAV if `av` is installed — lower latency —
-else OpenCV/FFMPEG), latest-frame-wins, so it can never stall the controls.
-Takeoff/land/flip run on a worker thread, so the rc stream and HUD never freeze
-while waiting for a (possibly lost) reply. Before flying on a Mac, consider
-`sudo ifconfig awdl0 down` (see Troubleshooting → Link quality).
+Hold a key to move; release and that axis coasts to a hover within ~0.5 s
+(tune `HOLD_S` / `RATE_S` in `tello_app/flight/controller.py`).
 
-## Repair & Testing Checklist
+Design notes: video decodes on a background thread (PyAV if installed, else
+OpenCV/FFMPEG), latest-frame-wins; takeoff/land/flip run on a worker thread —
+so nothing can ever stall the rc stream or the HUD.
 
-> **Historical record.** This documents the repair of the *original* drone, now
-> permanently grounded (power-rail fault). The flight unit is a working
-> replacement. Kept for reference; the `diagnostic.py` / `motor_debug.py` scripts
-> it once referenced have been removed (recover from git history if needed).
+## Troubleshooting
 
-### Phase 1 — Charge
-- [ ] Power off the drone (hold power button until LED goes dark)
-- [ ] Connect micro-USB cable to drone and a 5V/2A wall adapter
-- [ ] LED blinks blue = charging; solid blue = fully charged (~90 min)
-- [ ] Do NOT attempt flight below 20% battery
-
-### Phase 2 — Physical Repair (disconnected motor)
-
-**Diagnosed fault:** Motor M0 — **Rear-Left** (from drone's perspective) / **Back-Right** (looking at the drone from behind). CCW motor, black & white wires. Confirmed by visual inspection: motor does not spin, causes `Motor stop` error during forward thrust.
-
-**Motor layout** (drone's perspective, camera = front):
-```
-  [M3 front-left CW]      [M2 front-right CCW]
-  blue/red wires            black/white wires
-        \                        /
-         \      CAMERA ↑        /
-          \                    /
-           [   MAINBOARD    ]
-          /                    \
-         /      BATTERY ↓       \
-        /                        \
-  [M0 rear-left CCW] ★    [M1 rear-right CW]
-  black/white wires         blue/red wires
-
-  ★ = FAULTY MOTOR
-```
-
-**Wire color → polarity:**
-- CCW motors (M0, M2): **white = (+)**, **black = (−)**
-- CW motors (M1, M3): **red = (+)**, **blue = (−)**
-
-**Option A — Wire splice (easier, no shell opening needed):**
-The motor wires run through the arm from the motor to the mainboard.
-You can splice wire-to-wire without touching the board.
-- [ ] Remove the battery and propeller from the faulty motor
-- [ ] Pull the motor out from the arm mount (pull from the outside, not the body)
-- [ ] The old wires trail behind through the arm, still connected to the board
-- [ ] Cut the old wires near the motor (~2cm from the motor body)
-- [ ] Cut the new motor's wires to match length
-- [ ] **Cut at different lengths** (stagger the joins to prevent short circuits)
-- [ ] Splice new wires to old: twist together, solder, insulate each joint
-- [ ] Match colors: **black→black, white→white**
-- [ ] Wrap each joint in **heat shrink tubing** or electrical tape
-- [ ] Tuck the wires back into the arm grooves
-- [ ] Push the new motor into the mount until it seats firmly
-- [ ] Reattach propeller (CCW/type B for rear-left)
-- [ ] Reinsert battery and test
-
-**Option B — Mainboard resolder (if wires detached from the board):**
-- [ ] Remove battery, pop off top shell (4 clips, no screws)
-- [ ] Follow M0 wires through the arm to the mainboard solder pads
-- [ ] Resolder both wires: black = (−), white = (+)
-- [ ] Reinforce with hot glue over the joint
-- [ ] Reassemble shell
-- NOTE: There are **no published schematics** for the Tello mainboard.
-  The solder pads are tiny and close together. Use magnification.
-
-**Repair references:**
-- iFixit motor replacement: https://www.ifixit.com/Guide/DJI+Ryze+Tello+Motor+Replacement/104994
-- iFixit propeller replacement: https://www.ifixit.com/Guide/Tello+Quadcopter+Propeller+Replacement/138620
-- TelloPilots forum (photos + video): https://tellopilots.com/threads/hit-a-wall-killed-a-motor-how-to-replace.3496/
-- FCC internal teardown photos (board layout): https://fccid.io/2AOOE-WM0041801/Internal-Photos/Internal-Photos-3731020
-- DJI firmware wiki (board components): https://github.com/o-gs/dji-firmware-tools/wiki/WM004-Main-Processing-Core-Board
-
-**Tools needed:** soldering iron, solder with flux, heat shrink tubing or tape, wire strippers, needle-nose pliers
-
-### Phase 3 — Software Verification
-- [ ] Power on drone (LED blinks → solid green = Vision Positioning active)
-- [ ] Connect Mac to Tello Wi-Fi (`TELLO-XXXXXX`)
-- [ ] Verify connectivity:
-  ```bash
-  ping -c 3 192.168.10.1
-  ```
-- [ ] Start the controller and query sensors in the REPL:
-  ```bash
-  python main.py
-  ```
-  - `battery?` → confirm > 50%
-  - `state` → IMU (pitch/roll/yaw) near 0 at rest, telemetry streaming
-
-### Phase 4 — Motor Test
-- [ ] Place drone on a flat surface, clear area around it
-- [ ] Run interactive mode:
-  ```bash
-  python main.py
-  ```
-- [ ] Send `takeoff` — watch that ALL 4 propellers spin and drone lifts evenly
-- [ ] If drone tilts/flips → the tilting side's motor is still disconnected
-- [ ] Send `land` immediately after confirming stable hover
-- [ ] Check battery level: `battery?`
-
-### Phase 5 — Flight Test
-- [ ] Send `takeoff`
-- [ ] Test basic movement: `forward 30`, `back 30`
-- [ ] Test rotation: `cw 90`, `ccw 90`
-- [ ] Check `state` — verify height, velocity, IMU data look sane
-- [ ] Send `land`
-- [ ] Run the demo flight:
-  ```bash
-  python main.py --demo
-  ```
-
-### Troubleshooting
-- **Drone tips on takeoff** → the silent motor's cable is still loose
-- **"error" response to takeoff** → battery too low or propeller obstruction
-- **No Wi-Fi network visible** → long-press power 5s to reset Wi-Fi
-- **Timeout on commands** → check Wi-Fi connection, re-run `ping`
-- **"unactive" response to `command`** → update firmware via Tello mobile app
-
-### Link quality & video (lessons learned the hard way)
-- **macOS AWDL (AirDrop/AirPlay) stalls the Wi-Fi radio ~every second** — a top
-  cause of lost replies/laggy rc on a Mac. Fix for the session:
-  `sudo ifconfig awdl0 down` (macOS re-enables it later; re-run if the link
-  degrades). Turning Bluetooth off and AirDrop to "No One" also helps.
-  One-time setup so the flight scripts take it down automatically (no password):
+- **macOS AWDL (AirDrop/AirPlay) stalls the Wi-Fi radio ~every second** — the
+  top cause of lost replies/laggy rc. `drone.py` warns at startup; fix for the
+  session: `sudo ifconfig awdl0 down`. One-time setup so it's done automatically
+  (no password):
   ```bash
   echo "$USER ALL=(ALL) NOPASSWD: /sbin/ifconfig awdl0 down" | sudo tee /etc/sudoers.d/awdl
   ```
-- **`objc: Class AVFFrameReceiver is implemented in both ... cv2 ... and ... av ...`**
-  at startup is benign noise: opencv-python and PyAV each bundle their own FFmpeg
-  dylibs. Decoding still works; ignore it.
+- **Timeout on commands** → check you're on the Tello Wi-Fi (`ping -c 3 192.168.10.1`)
+- **No Wi-Fi network visible** → long-press power 5 s to reset Wi-Fi
+- **"unactive" response to `command`** → update firmware via the Tello mobile app
+- **`objc: Class AVFFrameReceiver is implemented in both ...`** at startup is
+  benign — cv2 and PyAV each bundle their own FFmpeg. Ignore it.
 - **`non-existing PPS 0 referenced` / `no frame!` at video startup is normal** —
-  the decoder is waiting for the first keyframe. Ignore it.
-- **`error while decoding MB x y` during flight = real packet loss** — the link
-  is congested or noisy. Get closer, kill AWDL, avoid crowded 2.4 GHz.
-- **Hovering drone drifts at `rc 0 0 0 0`** → that's the vision positioning
-  system (VPS) losing the floor, not a control bug. Fly over a *textured* floor
-  in good light; plain/glossy floors and dim rooms cause drift.
-- **The official app is smoother than the SDK and that's expected** — it speaks a
-  different binary protocol (50 Hz un-acked stick packets, keyframe re-requests).
-  The text SDK can still fly + stream reliably if the control loop never blocks
-  (see `keyboard_control.py` / `fpv.py` architecture).
+  the decoder is waiting for the first keyframe.
+- **`error while decoding MB x y` during flight = real packet loss** — get
+  closer, kill AWDL, avoid crowded 2.4 GHz.
+- **Hovering drone drifts at `rc 0 0 0 0`** → the vision positioning system is
+  losing the floor, not a control bug. Fly over a textured floor in good light.
+- **The official app is smoother than the SDK and that's expected** — it speaks
+  a different binary protocol (50 Hz un-acked stick packets). The text SDK still
+  flies + streams reliably as long as the control loop never blocks (see
+  `tello_app/shells/fpv.py`).
 
 ## Project Structure
 
 ```
 tello-drone/
-│  # ── Core library ──
-├── tello.py          # Tello class – UDP channels, commands, state receiver
-│
-│  # ── Control / entry points ──
-├── main.py           # Interactive REPL + scripted demo flight
-├── keyboard_control.py # Live keyboard flight (curses, real-time rc)
-├── fpv.py            # Keyboard flight + live video overlay (cv2; WASD+IJKL)
-├── keepalive.py      # Hold a session open so the drone doesn't idle-power-off
-│
-│  # ── Vision ──
-├── video_stream.py   # Live H.264 video + OpenCV face detection (needs cv2)
-│
-├── docs/             # Research & reference notes
-│   ├── IDEAS.md         # Project ideas (CV, automation, robotics, fun)
-│   ├── LIBRARIES.md     # Curated libraries + pip building blocks
-│   ├── ALTERNATIVES.md  # Alternative approaches / platforms
-│   └── FLIX-BUILD.md    # Flix flight-controller build notes
-│
-├── tests/            # Hardware-free unit tests (mock the Tello class)
-├── captures/         # Stills saved by video_stream.py (gitignored)
-├── pyproject.toml    # ruff + basedpyright config
-├── README.md
-└── CLAUDE.md         # Guidance for Claude Code
+├── drone.py             # THE entry point: fpv (default) / repl / demo
+├── keepalive.py         # Hold a session open so the drone doesn't idle-power-off
+├── tello_app/
+│   ├── tello.py         # Tello class – UDP channels, commands, state receiver
+│   ├── util.py          # Host-side helpers (macOS AWDL warning)
+│   ├── flight/          # Flight brain: keymap, FlightController, ActionRunner, HUD content
+│   ├── video/           # Background H.264 decode (PyAV / OpenCV), latest-frame-wins
+│   └── shells/          # Front-ends: fpv (video + keys), repl (raw SDK + demo)
+├── docs/                # Research notes (IDEAS, LIBRARIES, ALTERNATIVES, FLIX-BUILD)
+│   └── REPAIR.md        # Historical repair log for the original (grounded) unit
+├── tests/               # Hardware-free unit tests (mock the Tello class)
+├── pyproject.toml       # ruff + basedpyright config
+└── CLAUDE.md            # Guidance for Claude Code
 ```
 
-## SDK Command Reference
+Tests: `python -m unittest discover -s tests` (no drone needed).
+Lint/type-check: `uvx ruff check .` and `uvx basedpyright`.
+
+## SDK Command Reference (REPL)
 
 | Command | Description |
 |---|---|
@@ -261,4 +101,9 @@ tello-drone/
 - `emergency` kills motors instantly – the drone will **drop**
 - Always fly in an open area with sufficient ceiling height
 - Keep battery above 20% for stable flight
-- Wi-Fi reset: long-press power button for 5 seconds while powered on
+
+## Hardware note
+
+The original drone (dead motor + power-rail fault) is permanently grounded; a
+working replacement is the flight unit. The full teardown/repair log lives in
+[docs/REPAIR.md](docs/REPAIR.md).

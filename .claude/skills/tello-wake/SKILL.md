@@ -37,9 +37,9 @@ reconnect on link loss). Flags: `--interval <sec>` (default 8), `--quiet`,
 
 ## 3. It owns port 8889 while running
 
-Only one process can hold the command port. Before running `main.py` or
-`video_stream.py`, **stop keepalive** (those scripts keep the drone awake via
-their own commands). Restart keepalive afterwards for idle periods.
+Only one process can hold the command port. Before running `drone.py`,
+**stop keepalive** (it keeps the drone awake via
+its own commands). Restart keepalive afterwards for idle periods.
 
 ## Facts about this unit
 - Standard Tello on **SDK 1.3-era firmware** (NOT EDU): `sdk?`, `sn?`,

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Tests for keyboard_control.FlightController — pure logic, no curses, no drone.
+Tests for the flight controller — the flight brain (keymap, FlightController,
+_do_action, ActionRunner). Pure logic / threads, no curses, no cv2, no drone.
 
     python -m unittest discover -s tests
 """
 
-import curses
 import os
 import sys
 import threading
@@ -15,17 +15,22 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import keyboard_control as kc  # noqa: E402
-from keyboard_control import HOLD_S, SPEED_MAX, SPEED_MIN, FlightController  # noqa: E402
+from tello_app.flight import controller as fcmod  # noqa: E402
+from tello_app.flight.controller import (  # noqa: E402
+    HOLD_S,
+    SPEED_MAX,
+    SPEED_MIN,
+    FlightController,
+)
 
 
 class TestMovementMapping(unittest.TestCase):
     def test_keys_set_expected_axes_and_signs(self):
         fc = FlightController(speed=40)
         self.assertIsNone(fc.handle_key(ord("w"), 0.0))  # forward
-        self.assertIsNone(fc.handle_key(ord("a"), 0.0))  # left
-        self.assertIsNone(fc.handle_key(curses.KEY_UP, 0.0))    # up
-        self.assertIsNone(fc.handle_key(curses.KEY_RIGHT, 0.0)) # yaw right
+        self.assertIsNone(fc.handle_key(ord("a"), 0.0))  # strafe left
+        self.assertIsNone(fc.handle_key(ord("i"), 0.0))  # up
+        self.assertIsNone(fc.handle_key(ord("l"), 0.0))  # yaw right
         self.assertEqual(fc.tick(0.0), (-40, 40, 40, 40))  # (lr, fb, ud, yaw)
 
     def test_opposite_key_overrides_axis(self):
@@ -48,8 +53,8 @@ class TestDecayAndHover(unittest.TestCase):
     def test_hover_key_zeros_everything_immediately(self):
         fc = FlightController(speed=60)
         fc.handle_key(ord("w"), 0.0)
-        fc.handle_key(curses.KEY_LEFT, 0.0)
-        fc.handle_key(ord("x"), 0.0)  # hover
+        fc.handle_key(ord("j"), 0.0)  # yaw left
+        fc.handle_key(ord("h"), 0.0)  # hover
         self.assertEqual(fc.tick(0.0), (0, 0, 0, 0))
 
 
@@ -57,18 +62,20 @@ class TestDiscreteActions(unittest.TestCase):
     def test_action_keys_return_tokens(self):
         fc = FlightController()
         self.assertEqual(fc.handle_key(ord("t"), 0.0), "takeoff")
-        self.assertEqual(fc.handle_key(ord("l"), 0.0), "land")
+        self.assertEqual(fc.handle_key(ord("g"), 0.0), "land")
         self.assertEqual(fc.handle_key(ord("f"), 0.0), "flip")
         self.assertEqual(fc.handle_key(ord(" "), 0.0), "emergency")
-        self.assertEqual(fc.handle_key(ord("q"), 0.0), "quit")
+        self.assertEqual(fc.handle_key(27, 0.0), "quit")        # Esc
+        self.assertEqual(fc.handle_key(ord("q"), 0.0), "quit")  # q alias
+        self.assertIsNone(fc.handle_key(ord("h"), 0.0))         # hover is local-only
 
     def test_speed_clamps(self):
         fc = FlightController(speed=20)
         for _ in range(10):
-            fc.handle_key(ord("-"), 0.0)
+            fc.handle_key(ord("y"), 0.0)  # slower
         self.assertEqual(fc.speed, SPEED_MIN)
         for _ in range(20):
-            fc.handle_key(ord("="), 0.0)
+            fc.handle_key(ord("u"), 0.0)  # faster
         self.assertEqual(fc.speed, SPEED_MAX)
 
 
@@ -83,18 +90,18 @@ class TestActionExecution(unittest.TestCase):
         fc = FlightController(speed=50)
         fc.handle_key(ord("w"), 0.0)  # a held key before takeoff
         drone = self._fake_drone()
-        self.assertEqual(kc._do_action(drone, fc, "takeoff"), "airborne")
+        self.assertEqual(fcmod._do_action(drone, fc, "takeoff"), "airborne")
         self.assertTrue(fc.flying)
         self.assertEqual(fc.tick(0.0), (0, 0, 0, 0))  # not flung forward
 
     def test_takeoff_stays_airborne_when_reply_is_lost(self):
         """The crash bug: a takeoff whose 'ok' is lost MUST stay flying, so the
         loop keeps streaming rc instead of abandoning an airborne drone."""
-        from tello import TelloError
+        from tello_app.tello import TelloError
         fc = FlightController()
         drone = self._fake_drone()
         drone.send_command.side_effect = TelloError("Timed out")
-        msg = kc._do_action(drone, fc, "takeoff")
+        msg = fcmod._do_action(drone, fc, "takeoff")
         self.assertTrue(fc.flying)
         self.assertIn("airborne", msg.lower())
 
@@ -102,33 +109,34 @@ class TestActionExecution(unittest.TestCase):
         fc = FlightController()
         fc.flying = True
         drone = self._fake_drone()
-        self.assertEqual(kc._do_action(drone, fc, "takeoff"), "already airborne")
+        self.assertEqual(fcmod._do_action(drone, fc, "takeoff"), "already airborne")
         drone.send_command.assert_not_called()
 
     def test_flip_blocked_when_not_flying(self):
         fc = FlightController()
         drone = self._fake_drone()
-        msg = kc._do_action(drone, fc, "flip")
+        msg = fcmod._do_action(drone, fc, "flip")
         self.assertIn("not flying", msg)
         drone.flip.assert_not_called()
 
-    def test_flip_rejection_shows_battery_hint(self):
-        from tello import TelloError
+    def test_flip_rejection_surfaces_drone_error(self):
+        from tello_app.tello import TelloError
         fc = FlightController()
         fc.flying = True
         drone = self._fake_drone()
-        drone.flip.side_effect = TelloError("error")
-        msg = kc._do_action(drone, fc, "flip")
-        self.assertIn("> 50%", msg)
+        drone.flip.side_effect = TelloError("Command 'flip f' failed: error Not joystick")
+        msg = fcmod._do_action(drone, fc, "flip")
+        self.assertIn("flip rejected", msg)
+        self.assertIn("Not joystick", msg)  # the drone's real reason, not a guess
         self.assertTrue(fc.flying)  # a failed flip doesn't change flight state
 
     def test_land_clears_flying_even_when_drone_errors(self):
-        from tello import TelloError
+        from tello_app.tello import TelloError
         fc = FlightController()
         fc.flying = True
         drone = self._fake_drone()
         drone.send_command.side_effect = TelloError("error")  # land cmd errors...
-        msg = kc._do_action(drone, fc, "land")
+        msg = fcmod._do_action(drone, fc, "land")
         self.assertFalse(fc.flying)                         # ...still clear flying
         self.assertEqual(drone.send_command.call_count, 2)  # retried once
         self.assertIn("verify", msg)
@@ -137,7 +145,7 @@ class TestActionExecution(unittest.TestCase):
         fc = FlightController()
         fc.flying = True
         drone = self._fake_drone()
-        self.assertEqual(kc._do_action(drone, fc, "land"), "landed")
+        self.assertEqual(fcmod._do_action(drone, fc, "land"), "landed")
         self.assertFalse(fc.flying)
 
     def test_emergency_bursts_and_clears_state(self):
@@ -145,7 +153,7 @@ class TestActionExecution(unittest.TestCase):
         fc.flying = True
         fc.handle_key(ord("d"), 0.0)
         drone = self._fake_drone()
-        msg = kc._do_action(drone, fc, "emergency")
+        msg = fcmod._do_action(drone, fc, "emergency")
         self.assertIn("EMERGENCY", msg)
         self.assertFalse(fc.flying)
         self.assertEqual(fc.tick(0.0), (0, 0, 0, 0))
@@ -178,7 +186,7 @@ class TestActionRunner(unittest.TestCase):
         release = threading.Event()
         drone = self._slow_drone(release)
         fc = FlightController()
-        runner = kc.ActionRunner(drone, fc)
+        runner = fcmod.ActionRunner(drone, fc)
         t0 = time.time()
         runner.submit("takeoff")
         self.assertLess(time.time() - t0, 0.1)  # the crash bug: this used to block
@@ -194,7 +202,7 @@ class TestActionRunner(unittest.TestCase):
         drone = self._slow_drone(release)
         fc = FlightController()
         fc.flying = True
-        runner = kc.ActionRunner(drone, fc)
+        runner = fcmod.ActionRunner(drone, fc)
         runner.submit("takeoff")          # worker grabs this and blocks
         time.sleep(0.1)
         runner.submit("land")             # queued
@@ -209,7 +217,7 @@ class TestActionRunner(unittest.TestCase):
         release = threading.Event()
         drone = self._slow_drone(release)
         fc = FlightController()
-        runner = kc.ActionRunner(drone, fc)
+        runner = fcmod.ActionRunner(drone, fc)
         runner.submit("takeoff")
         time.sleep(0.1)
         t0 = time.time()

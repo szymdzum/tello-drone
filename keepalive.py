@@ -19,15 +19,14 @@ Requirements:
     - Stdlib only. Ctrl-C to stop.
 
 Note: this owns the command port (8889) while running. Stop it before running
-main.py / video_stream.py — those send their own commands and keep the drone
-awake on their own.
+drone.py — it sends its own commands and keeps the drone awake on its own.
 """
 import argparse
 import subprocess
 import sys
 import time
 
-from tello import Tello, TelloError
+from tello_app.tello import Tello, TelloError
 
 # Default Tello AP for this project's flight unit. macOS likes to roam back to
 # an internet-capable network; this lets the watchdog force en0 back here.
