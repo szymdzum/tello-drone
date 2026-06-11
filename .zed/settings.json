@@ -1,0 +1,43 @@
+{
+  // Project-scoped Zed settings for the tello-drone repo.
+  // Overrides ~/.config/zed/settings.json only inside this folder.
+  "languages": {
+    "Python": {
+      // basedpyright = types/completions, ruff = lint + format.
+      "language_servers": ["basedpyright", "ruff"],
+      // Repo is 4-space indent (global default is 2).
+      "tab_size": 4,
+      // Use ruff as the formatter; organize imports as a format action.
+      "formatter": {
+        "language_server": { "name": "ruff" }
+      },
+      "code_actions_on_format": {
+        "source.organizeImports.ruff": true
+      }
+      // format_on_save inherits your global "off". To auto-format Python
+      // on save in this repo only, add:  "format_on_save": "on"
+    }
+  },
+  "lsp": {
+    "basedpyright": {
+      "settings": {
+        "basedpyright.analysis": {
+          // Only analyze open files (don't scan .venv on every keystroke).
+          "diagnosticMode": "openFilesOnly",
+          // "basic" keeps a stdlib learning project quiet; bump to
+          // "standard"/"strict" if you want more type pedantry.
+          "typeCheckingMode": "basic"
+        }
+      }
+    }
+  },
+  "terminal": {
+    // Auto-activate ./.venv when you open an integrated terminal here.
+    "detect_venv": {
+      "on": {
+        "directories": [".venv"],
+        "activate_script": "default"
+      }
+    }
+  }
+}

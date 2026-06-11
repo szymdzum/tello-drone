@@ -1,0 +1,41 @@
+# Shared tooling config for the tello-drone project.
+# No packaging here (the core is stdlib-only, run as plain scripts) — this file
+# exists purely to make ruff + basedpyright behave the same in Zed and on the CLI.
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+# Default ruff set (E4/E7/E9, F) plus import sorting (I), pyupgrade (UP),
+# bugbear (B), and pycodestyle warnings (W). Deliberately NOT enabling `SIM` —
+# it wants to rewrite hand-written control flow (try/except/pass, nested ifs)
+# that's clearer as-is in a learning codebase.
+select = ["E", "F", "W", "I", "UP", "B"]
+# Don't nag about line length — the FFMPEG option strings are deliberately long.
+# Run `ruff format` if you want hard wrapping.
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.basedpyright]
+typeCheckingMode = "basic"
+pythonVersion = "3.14"
+# Point the type checker at the project venv so cv2/numpy resolve without the
+# manual toolchain picker. Editor (Zed) and CLI both read this.
+venvPath = "."
+venv = ".venv"
+
+# OpenCV (opencv-python) ships no/partial type stubs, so everything coming out of
+# cv2 is "Unknown". basedpyright's strict-by-default rules turn that into ~25
+# warnings of pure noise. Silence the untyped-library family; keep real checks.
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportUnknownParameterType = false
+reportMissingTypeStubs = false
+reportAny = false
+# basedpyright-only: flags ignoring a function's return value (cv2.rectangle etc.).
+reportUnusedCallResult = false
