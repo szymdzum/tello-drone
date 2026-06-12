@@ -39,6 +39,7 @@ DISCRETES = {
     ord("u"): "speed_up", ord("U"): "speed_up",
     ord("p"): "follow", ord("P"): "follow",
     ord("m"): "marker", ord("M"): "marker",
+    ord("c"): "snapshot", ord("C"): "snapshot",  # save a raw camera frame (shell-side)
     ord(" "): "emergency",
     27: "quit",                          # Esc
     ord("q"): "quit", ord("Q"): "quit",  # q alias (easy reach; Esc can be fiddly)

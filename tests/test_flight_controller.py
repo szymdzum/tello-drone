@@ -67,6 +67,7 @@ class TestDiscreteActions(unittest.TestCase):
         self.assertEqual(fc.handle_key(ord(" "), 0.0), "emergency")
         self.assertEqual(fc.handle_key(27, 0.0), "quit")        # Esc
         self.assertEqual(fc.handle_key(ord("q"), 0.0), "quit")  # q alias
+        self.assertEqual(fc.handle_key(ord("c"), 0.0), "snapshot")  # shell-side save
         self.assertIsNone(fc.handle_key(ord("h"), 0.0))         # hover is local-only
 
     def test_speed_clamps(self):

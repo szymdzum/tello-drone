@@ -18,6 +18,7 @@ Requires opencv-python (cv2) + numpy. Video decode runs on a background thread
 so a decode hiccup can't stall the control loop; the GUI stays on the main
 thread (required on macOS).
 """
+import os
 import time
 
 import cv2
@@ -36,6 +37,20 @@ from tello_app.tello import Tello
 from tello_app.video.stream import VideoStream
 from tello_app.vision.face import FaceDetector
 from tello_app.vision.marker import MarkerDetector
+
+
+def _save_snapshot(video: VideoStream, drone: Tello) -> str | None:
+    """Save the newest RAW camera frame (no HUD) to captures/ — dataset
+    collection for detector development. Returns the path, or None if the
+    video link hasn't produced a frame yet."""
+    frame = video.read()  # fresh copy from the decoder, never the HUD-drawn one
+    if frame is None:
+        return None
+    os.makedirs("captures", exist_ok=True)
+    path = time.strftime("captures/cap_%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}.jpg"
+    cv2.imwrite(path, frame)
+    drone.log.event("capture", path=path)
+    return path
 
 
 def _draw_overlay(frame, drone: Tello, fc: FlightController,
@@ -134,7 +149,10 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
                 action = fc.handle_key(key, now)
                 if action == "quit":
                     break
-                if action:
+                if action == "snapshot":  # shell-side: needs the video stream
+                    path = _save_snapshot(video, drone)
+                    runner.last_result = f"saved {path}" if path else "no frame yet"
+                elif action:
                     runner.submit(action)  # worker thread; rc stream never stalls
 
             # Sticks stream while airborne; grounded, Tello.start_keepalive owns the link.

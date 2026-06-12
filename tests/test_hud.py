@@ -25,7 +25,7 @@ class TestHelpMirrorsKeymap(unittest.TestCase):
 
     def test_core_action_keys_documented(self):
         help_text = " ".join(hud.HELP_LINES).lower()
-        for ch in ("t", "g", "f", "h", "y", "u", "q"):
+        for ch in ("t", "g", "f", "h", "y", "u", "q", "p", "m", "c"):
             self.assertIn(ch, help_text, f"action key {ch!r} missing from HUD help")
 
     def test_help_is_ascii_only(self):
