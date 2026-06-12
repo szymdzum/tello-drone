@@ -2,6 +2,10 @@
 
 [![CI](https://github.com/szymdzum/tello-drone/actions/workflows/ci.yml/badge.svg)](https://github.com/szymdzum/tello-drone/actions/workflows/ci.yml)
 
+![FPV HUD with face follow locked on](docs/hud.jpg)
+*Live FPV: face follow engaged (`p`), HUD with attitude ladder, yaw tape,
+telemetry, and virtual sticks — the drone is holding position on its own.*
+
 Fly a Ryze/DJI Tello from scratch — raw UDP sockets, no drone framework. The
 protocol core is stdlib-only; FPV flight needs `opencv-python` + `numpy`
 (+ optionally `av` for lower-latency video decode).
