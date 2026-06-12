@@ -57,6 +57,8 @@ def drift_correction(vgx, vgy) -> tuple[int, int, int, int]:
 # of the frame width, so the face deadband would swallow the distance error.
 MARKER_TARGET_W = 0.06
 MARKER_FB_DEADBAND = 0.012
+LR_GAIN = 90       # strafe-centering gain (marker hold)
+MAX_LR = 30
 
 
 class FaceFollower:
@@ -69,9 +71,18 @@ class FaceFollower:
     hit a wall."""
 
     def __init__(self, target_w: float = TARGET_W,
-                 fb_deadband: float = FB_DEADBAND) -> None:
+                 fb_deadband: float = FB_DEADBAND,
+                 strafe_centering: bool = False) -> None:
+        """strafe_centering: correct horizontal error with lr instead of yaw.
+        REQUIRED for static targets (marker hold): yaw cannot counter lateral
+        translation, so yaw-centering a fixed marker is structurally unstable —
+        any sideways drift becomes a runaway orbit around the target (the
+        2026-06-12 screen-test incident; VPS was blind so the drift damper saw
+        zeros). Strafe opposes translation directly; heading stays put. Faces
+        keep yaw-centering — a follower should turn to face a moving person."""
         self._target_w = target_w
         self._fb_deadband = fb_deadband
+        self._strafe = strafe_centering
         self._last_seen = 0.0
         self._vel = (0, 0, 0, 0)
 
@@ -82,13 +93,19 @@ class FaceFollower:
             return self._vel
         self._last_seen = now
         cx, cy, w = det
-        yaw = _axis(cx - 0.5, YAW_GAIN, DEADBAND, MAX_YAW)   # target right -> yaw right
+        if self._strafe:
+            lr = _axis(cx - 0.5, LR_GAIN, DEADBAND, MAX_LR)  # target right -> strafe right
+            yaw = 0
+        else:
+            lr = 0
+            yaw = _axis(cx - 0.5, YAW_GAIN, DEADBAND, MAX_YAW)  # target right -> yaw right
         ud = _axis(0.5 - cy, UD_GAIN, DEADBAND, MAX_UD)      # target high -> climb
         fb = _axis(self._target_w - w, FB_GAIN, self._fb_deadband, MAX_FB)
-        self._vel = (0, fb, ud, yaw)
+        self._vel = (lr, fb, ud, yaw)
         return self._vel
 
 
 def marker_holder() -> FaceFollower:
     """Position hold relative to a printed ArUco marker (see vision/marker.py)."""
-    return FaceFollower(target_w=MARKER_TARGET_W, fb_deadband=MARKER_FB_DEADBAND)
+    return FaceFollower(target_w=MARKER_TARGET_W, fb_deadband=MARKER_FB_DEADBAND,
+                        strafe_centering=True)

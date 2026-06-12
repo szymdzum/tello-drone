@@ -44,15 +44,32 @@ class TestMarkerDetection(unittest.TestCase):
         blank = np.full((720, 960, 3), 255, np.uint8)
         self.assertIsNone(self.det._detect(blank))
 
-    def test_largest_marker_wins(self):
-        # two markers: id 1 small (far), id 2 large (near) — hold on the near one
+    def test_largest_allowed_marker_wins(self):
+        # two allowed markers: id 1 small (far), id 2 large (near) — near wins
+        det = MarkerDetector(video=None, ids=(1, 2))
         frame = frame_with_marker(marker_id=1, size=60, x=100, y=100)
         d = cv2.aruco.getPredefinedDictionary(DICT)
         big = cv2.aruco.generateImageMarker(d, 2, 200)
         frame[400:600, 600:800] = cv2.cvtColor(big, cv2.COLOR_GRAY2BGR)
-        found = self.det._detect(frame)
+        found = det._detect(frame)
         assert found is not None
         self.assertEqual(found[2], 2)
+
+    def test_unknown_id_is_rejected(self):
+        """The phantom-marker incident: scene texture decoded as id 17 and the
+        controller chased it. Only allowlisted ids may steer."""
+        frame = frame_with_marker(marker_id=17, size=120)
+        self.assertIsNone(self.det._detect(frame))  # default allowlist = {0}
+
+    def test_phantom_never_outranks_the_real_marker(self):
+        # big id-17 phantom + small real id-0: the real one must win
+        frame = frame_with_marker(marker_id=0, size=80, x=120, y=120)
+        d = cv2.aruco.getPredefinedDictionary(DICT)
+        phantom = cv2.aruco.generateImageMarker(d, 17, 240)
+        frame[380:620, 560:800] = cv2.cvtColor(phantom, cv2.COLOR_GRAY2BGR)
+        found = self.det._detect(frame)
+        assert found is not None
+        self.assertEqual(found[2], 0)
 
     def test_no_detection_served_when_stale(self):
         self.assertIsNone(self.det.latest())

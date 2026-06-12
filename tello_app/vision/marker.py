@@ -23,9 +23,14 @@ MAX_AGE_S = 0.5
 class MarkerDetector:
     """Largest ArUco marker in the newest frame, on a worker thread."""
 
-    def __init__(self, video, log=None) -> None:
+    def __init__(self, video, log=None, ids: tuple[int, ...] = (0,)) -> None:
+        """ids: accepted marker ids. Default = just id 0 (docs/marker0.png).
+        Random scene texture occasionally decodes as a small spurious marker
+        (the screen-test incident chased a phantom id 17 in a frame corner) —
+        an explicit allowlist is the point of using ArUco at all."""
         self._video = video
         self._log = log
+        self._ids = set(ids)
         self._detector = cv2.aruco.ArucoDetector(
             cv2.aruco.getPredefinedDictionary(DICT),
             cv2.aruco.DetectorParameters())
@@ -66,7 +71,10 @@ class MarkerDetector:
         if ids is None or not len(corners):
             return None
         quads = [c.reshape(4, 2) for c in corners]
-        i = max(range(len(quads)), key=lambda k: cv2.contourArea(quads[k]))
+        allowed = [k for k in range(len(quads)) if int(ids.ravel()[k]) in self._ids]
+        if not allowed:
+            return None
+        i = max(allowed, key=lambda k: cv2.contourArea(quads[k]))
         quad = quads[i]
         fh, fw = gray.shape[:2]
         cx, cy = quad.mean(axis=0)

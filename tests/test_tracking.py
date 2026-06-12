@@ -175,6 +175,22 @@ class TestAutopilotModes(unittest.TestCase):
         fc.follow = False              # safety sites: clears ANY autopilot
         self.assertIsNone(fc.autopilot)
 
+    def test_marker_holder_centers_with_strafe_not_yaw(self):
+        """The orbit incident: yaw cannot counter lateral translation, so a
+        static target must be centered by strafing with heading held."""
+        holder = tracking.marker_holder()
+        lr, _, _, yaw = holder.update((0.7, 0.5, tracking.MARKER_TARGET_W), 0.0)
+        self.assertGreater(lr, 0)   # marker right of center -> strafe right
+        self.assertEqual(yaw, 0)    # heading stays put
+        lr, _, _, yaw = holder.update((0.3, 0.5, tracking.MARKER_TARGET_W), 0.1)
+        self.assertLess(lr, 0)
+        self.assertEqual(yaw, 0)
+
+    def test_face_follower_still_centers_with_yaw(self):
+        lr, _, _, yaw = FaceFollower().update((0.8, 0.5, tracking.TARGET_W), 0.0)
+        self.assertEqual(lr, 0)
+        self.assertGreater(yaw, 0)
+
     def test_marker_holder_uses_tighter_size_band(self):
         # a marker at 4% width (slightly far) must produce approach, even
         # though the face deadband would swallow an error this small

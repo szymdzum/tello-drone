@@ -112,9 +112,15 @@ from control: `tello_app/vision/face.py` (Haar cascade) and
 `docs/marker0.png` at 10 cm) each run on their own latest-wins thread (same
 pattern as video decode — detection can never stall the control loop) and emit
 plain frame-fraction tuples; `tello_app/flight/tracking.py` is the pure
-P-controller (`FaceFollower`: yaw centers, ud levels, fb holds apparent size;
-never strafes, low caps — `marker_holder()` is the same controller with a
-tighter size band) — stdlib-only and unit-tested in `tests/test_tracking.py`.
+P-controller (`FaceFollower`: ud levels, fb holds apparent size, low caps) —
+stdlib-only and unit-tested in `tests/test_tracking.py`. Horizontal centering
+differs BY DESIGN: faces center with yaw (turn to face a moving person);
+markers center with strafe and hold heading (`marker_holder()`) — yaw cannot
+counter lateral translation, so yaw-centering a static target is structurally
+unstable (runaway orbit; the 2026-06-12 screen-test incident, where blind VPS
+also hid the drift from telemetry). MarkerDetector takes an id allowlist
+(default `{0}`) — scene texture can decode as a phantom marker (id 17 that
+same flight).
 Modes live in `fc.autopilot` (None/"follow"/"marker", mutually exclusive);
 `fc.follow` survives as a compat property whose setter `False` clears ANY
 autopilot — which is what every safety site wants. Safety contracts: any
