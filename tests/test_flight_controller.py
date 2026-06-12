@@ -185,6 +185,90 @@ class TestActionExecution(unittest.TestCase):
         self.assertFalse(fc.landing)                   # released on touchdown
 
 
+class TestCrashMonitor(unittest.TestCase):
+    """Reconciling a stale 'airborne' belief with telemetry after a crash.
+    The flip rule may clear flying (unambiguous: firmware cuts motors);
+    the grounded-looking rule is display-only."""
+
+    def _drone(self, state, age=0.1):
+        drone = MagicMock()
+        drone.state = state
+        drone.state_age.return_value = age
+        return drone
+
+    def _flying_fc(self):
+        fc = FlightController()
+        fc.flying = True
+        return fc
+
+    def test_sustained_flip_clears_flying_and_explains(self):
+        # roll: 179 held — the real crash log: upside down on the floor for 8 s
+        fc = self._flying_fc()
+        fc.follow = True
+        m = fcmod.CrashMonitor()
+        drone = self._drone({"roll": 179, "h": 0})
+        self.assertIsNone(m.update(drone, fc, 0.0))   # first sighting: not yet
+        self.assertTrue(fc.flying)
+        msg = m.update(drone, fc, fcmod.FLIP_HOLD_S + 0.1)
+        self.assertIn("flipped", msg or "")
+        self.assertFalse(fc.flying)   # 't' is re-armed for relaunch
+        self.assertFalse(fc.follow)
+
+    def test_transient_tumble_does_not_fire(self):
+        """The runaway-drift regression: a mid-air tumble transits |roll|>120
+        for under a second and the firmware recovers — cutting the rc stream
+        on that single sample is what set the drone adrift."""
+        fc = self._flying_fc()
+        m = fcmod.CrashMonitor()
+        m.update(self._drone({"roll": 108, "h": -150}), fc, 0.0)   # tumbling
+        m.update(self._drone({"roll": 130, "h": -150}), fc, 0.2)   # peak
+        m.update(self._drone({"roll": -16, "h": -350}), fc, 0.6)   # recovered
+        msg = m.update(self._drone({"roll": 130, "h": 0}), fc, 5.0)  # new transient
+        self.assertIsNone(msg)
+        self.assertTrue(fc.flying)  # rc stream keeps flowing throughout
+
+    def test_stale_flip_telemetry_is_ignored(self):
+        fc = self._flying_fc()
+        drone = self._drone({"roll": 179}, age=5.0)
+        m = fcmod.CrashMonitor()
+        self.assertIsNone(m.update(drone, fc, 0.0))
+        self.assertIsNone(m.update(drone, fc, fcmod.FLIP_HOLD_S + 1))
+        self.assertTrue(fc.flying)  # blind: keep the safe belief
+
+    def test_normal_attitude_never_fires(self):
+        fc = self._flying_fc()
+        drone = self._drone({"roll": -30, "h": 50, "vgx": 5, "vgy": 0, "vgz": 1})
+        m = fcmod.CrashMonitor()
+        self.assertIsNone(m.update(drone, fc, 0.0))
+        self.assertTrue(fc.flying)
+        self.assertFalse(m.down_hint(10.0))
+
+    def test_garbage_roll_value_is_harmless(self):
+        fc = self._flying_fc()
+        drone = self._drone({"roll": "junk", "h": 50})
+        self.assertIsNone(fcmod.CrashMonitor().update(drone, fc, 0.0))
+
+    def test_down_hint_needs_sustained_grounded_telemetry(self):
+        fc = self._flying_fc()
+        still = {"roll": 0, "h": 0, "vgx": 0, "vgy": 0, "vgz": 0}
+        m = fcmod.CrashMonitor()
+        m.update(self._drone(still), fc, 0.0)
+        self.assertFalse(m.down_hint(1.0))            # too soon
+        m.update(self._drone(still), fc, 4.0)
+        self.assertTrue(m.down_hint(4.0))             # sustained
+        self.assertTrue(fc.flying)                    # display-only — no control change
+        # movement in telemetry resets the clock
+        m.update(self._drone({"roll": 0, "h": 20, "vgx": 0, "vgy": 0, "vgz": 0}), fc, 5.0)
+        self.assertFalse(m.down_hint(8.0))
+
+    def test_not_flying_resets_and_stays_quiet(self):
+        fc = FlightController()  # on the ground, belief correct
+        still = {"roll": 0, "h": 0, "vgx": 0, "vgy": 0, "vgz": 0}
+        m = fcmod.CrashMonitor()
+        self.assertIsNone(m.update(self._drone(still), fc, 0.0))
+        self.assertFalse(m.down_hint(10.0))
+
+
 class TestActionRunner(unittest.TestCase):
     """The worker thread that keeps the control loop non-blocking."""
 
@@ -255,6 +339,33 @@ class TestActionRunner(unittest.TestCase):
         sent = [c.args[0] for c in drone.send_command.call_args_list]
         self.assertNotIn("takeoff", sent)
         self.assertFalse(fc.flying)       # landed, and it STAYED landed
+
+    def test_wait_idle_reflects_worker_state(self):
+        release = threading.Event()
+        drone = self._slow_drone(release)
+        runner = fcmod.ActionRunner(drone, FlightController())
+        self.assertTrue(runner.wait_idle(0.5))   # nothing submitted yet
+        runner.submit("takeoff")
+        self.assertFalse(runner.wait_idle(0.2))  # blocked on the slow drone
+        release.set()
+        self.assertTrue(runner.wait_idle(2.0))
+
+    def test_worker_survives_action_exception(self):
+        """An unexpected error (e.g. OSError from a closing socket) must not
+        kill the worker thread — that would hang every later action."""
+        drone = MagicMock()
+        drone.send_command.side_effect = OSError("socket closed")
+        fc = FlightController()
+        runner = fcmod.ActionRunner(drone, fc)
+        runner.submit("takeoff")
+        self.assertTrue(runner.wait_idle(2.0))
+        self.assertIn("failed", runner.last_result)
+        self.assertFalse(fc.landing)  # land flags can't stay frozen either
+        drone.send_command.side_effect = None
+        drone.send_command.return_value = "ok"
+        runner.submit("land")  # worker still alive and executing
+        self.assertTrue(runner.wait_idle(2.0))
+        self.assertEqual(runner.last_result, "landed")
 
     def test_emergency_runs_inline_even_while_worker_blocked(self):
         release = threading.Event()

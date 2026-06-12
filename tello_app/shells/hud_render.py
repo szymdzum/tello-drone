@@ -192,7 +192,7 @@ def _stick(frame, cx, cy, r, xval, yval, labels, active) -> None:
     cv2.circle(frame, (px, py), 9, TEXT, 1, cv2.LINE_AA)
 
 
-def _status_bar(frame, snap, status, w, h, emergency) -> None:
+def _status_bar(frame, snap, status, w, h, emergency, down_hint=False) -> None:
     """SPEED | STATE | STATUS cells, bottom-center, with the legend below."""
     x0, x1 = w // 2 - 280, w // 2 + 280
     y0, y1 = h - 92, h - 50
@@ -209,8 +209,16 @@ def _status_bar(frame, snap, status, w, h, emergency) -> None:
     vel_txt = f"{vel:.1f}" if vel is not None else "--"
     _text(frame, vel_txt, (x0 + 14, y1 - 9), 0.65, TEXT, 1, HERO)
     _text(frame, "m/s", (x0 + 18 + _width(vel_txt, 0.65, 1, HERO), y1 - 9), 0.38, TEXT2)
-    state = "DISARMED" if emergency else ("AIRBORNE" if snap["flying"] else "ON GROUND")
-    state_col = DANGER if emergency else (OK if snap["flying"] else TEXT2)
+    if emergency:
+        state, state_col = "DISARMED", DANGER
+    elif snap["flying"] and down_hint:
+        # Telemetry says grounded while we believe airborne (crash?) — stop
+        # claiming AIRBORNE, tell the pilot how to resync.
+        state, state_col = "DOWN? (g)", WARN
+    elif snap["flying"]:
+        state, state_col = "AIRBORNE", OK
+    else:
+        state, state_col = "ON GROUND", TEXT2
     _text(frame, "STATE", (c1 + 14, y0 + 16), 0.38, TEXT2)
     _text(frame, state, (c1 + 14, y1 - 9), 0.65, state_col, 1, HERO)
     _text(frame, "STATUS", (c2 + 14, y0 + 16), 0.38, TEXT2)
@@ -219,6 +227,29 @@ def _status_bar(frame, snap, status, w, h, emergency) -> None:
     lx0 = max(10, (w - _LEGEND_W) // 2 - 10)
     _panel(frame, lx0, h - 42, min(w - 10, lx0 + _LEGEND_W + 20), h - 16, alpha=0.5)
     _text(frame, _LEGEND, ((w - _LEGEND_W) // 2, h - 24), 0.4, TEXT2)
+
+
+def draw_face(frame, box, following: bool) -> None:
+    """Face-detection box with corner ticks; cyan = seen, green = steering."""
+    x, y, bw, bh = box
+    color = OK if following else CYAN
+    t = max(10, bw // 5)
+    for cx, sx in ((x, 1), (x + bw, -1)):
+        for cy, sy in ((y, 1), (y + bh, -1)):
+            cv2.line(frame, (cx, cy), (cx + sx * t, cy), color, 2, cv2.LINE_AA)
+            cv2.line(frame, (cx, cy), (cx, cy + sy * t), color, 2, cv2.LINE_AA)
+    if following:
+        _text(frame, "LOCK", (x, y - 8), 0.45, color)
+
+
+def _follow_badge(frame, w, locked: bool) -> None:
+    """FOLLOW mode indicator under the yaw tape."""
+    label = "FOLLOW" if locked else "FOLLOW (no face)"
+    color = OK if locked else WARN
+    lw = _width(label, 0.5, 1)
+    x0 = (w - lw) // 2 - 12
+    _panel(frame, x0, 74, x0 + lw + 24, 100, stroke=color)
+    _text(frame, label, ((w - lw) // 2, 92), 0.5, color)
 
 
 # ── State variants ──────────────────────────────────────────
@@ -247,7 +278,8 @@ def _emergency_overlay(frame, w, h) -> None:
     _text(frame, sub, ((w - _width(sub, 0.5)) // 2, y0 + 68), 0.5, TEXT2)
 
 
-def draw(frame, snap: dict, rc: tuple[int, int, int, int], status: str) -> None:
+def draw(frame, snap: dict, rc: tuple[int, int, int, int], status: str,
+         face_locked: bool = False, down_hint: bool = False) -> None:
     """Render the full HUD onto a video frame (in place)."""
     h, w = frame.shape[:2]
     emergency = snap["emergency"]  # real state, not a status-text parse
@@ -264,7 +296,9 @@ def draw(frame, snap: dict, rc: tuple[int, int, int, int], status: str) -> None:
            snap["flying"])
     _stick(frame, w - 112, h - 136, 60, yaw_in, ud, ("UP", "DOWN", "L", "R"),
            snap["flying"])
-    _status_bar(frame, snap, status, w, h, emergency)
+    _status_bar(frame, snap, status, w, h, emergency, down_hint)
+    if snap.get("follow"):
+        _follow_badge(frame, w, face_locked)
 
     if emergency:
         _emergency_overlay(frame, w, h)

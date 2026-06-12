@@ -7,10 +7,11 @@ this module. Depends only on tello.py: no cv2, fully unit-testable.
 
 Key scheme:
     W/S forward/back   A/D strafe l/r   I/K up/down (throttle)   J/L yaw l/r
-    t takeoff · g land · f flip · h hover · y/u slower/faster
+    t takeoff · g land · f flip · h hover · y/u slower/faster · p follow face
     SPACE emergency · Esc/q quit
 """
 import threading
+import time
 
 from tello_app.tello import Tello, TelloError
 
@@ -36,6 +37,7 @@ DISCRETES = {
     ord("h"): "hover", ord("H"): "hover",
     ord("y"): "speed_down", ord("Y"): "speed_down",
     ord("u"): "speed_up", ord("U"): "speed_up",
+    ord("p"): "follow", ord("P"): "follow",
     ord(" "): "emergency",
     27: "quit",                          # Esc
     ord("q"): "quit", ord("Q"): "quit",  # q alias (easy reach; Esc can be fiddly)
@@ -58,6 +60,7 @@ class FlightController:
         self.flying = False
         self.landing = False    # a commanded landing is in progress: steering frozen
         self.emergency = False  # motors were cut; cleared by the next takeoff
+        self.follow = False     # face-follow mode: a tracker steers instead of keys
 
     def handle_key(self, key: int, now: float) -> str | None:
         """Process one key. Returns a discrete action string (takeoff/land/flip/
@@ -66,12 +69,19 @@ class FlightController:
         if key in self.moves:
             if self.landing:
                 return None  # no steering during a commanded landing
+            self.follow = False  # any stick input = instant manual override
             axis, sign = self.moves[key]
             self.vel[axis] = sign * self.speed
             self._last[axis] = now
             return None
         action = self.discretes.get(key)
+        if action == "follow":
+            self.follow = not self.follow
+            if self.follow:
+                self.hover()  # hand over from zero, not from a held key's velocity
+            return None
         if action == "hover":
+            self.follow = False
             self.hover()
             return None
         if action == "speed_down":
@@ -98,6 +108,75 @@ class FlightController:
             if v and now - self._last[axis] > HOLD_S:
                 self.vel[axis] = 0
         return self.vel["lr"], self.vel["fb"], self.vel["ud"], self.vel["yaw"]
+
+
+FLIP_ROLL_DEG = 120  # inverted-on-the-ground territory (real crash read 179)
+FLIP_HOLD_S = 1.0    # inversion must be SUSTAINED: a mid-air tumble the
+                     # firmware recovers from transits >120 deg for <1 s, and
+                     # firing on it cut the rc stream mid-flight (the runaway
+                     # drift incident) — a drone lying on its back stays there
+DOWN_HOLD_S = 3.0    # grounded-looking telemetry this long -> show the DOWN? hint
+
+
+class CrashMonitor:
+    """Reconciles the controller's airborne belief with telemetry after a crash
+    (the 'HUD said AIRBORNE while it sat on the floor' incident).
+
+    Two signals, deliberately different strengths:
+      - flip: |roll| >= FLIP_ROLL_DEG sustained FLIP_HOLD_S in FRESH telemetry —
+        a drone lying on its back, not a transient tumble. update() clears
+        fc.flying (re-arming 't'); the CALLER must also submit a land: if the
+        detector is ever wrong again, the failure mode must be 'drone lands',
+        never 'rc stream silently stops' (the runaway drift incident).
+      - down_hint(): h == 0 and zero velocity sustained DOWN_HOLD_S while we
+        still believe airborne. DISPLAY-ONLY: baro/VPS can misread, and a false
+        'landed' abandons a flying drone (see _do_action). The pilot resyncs
+        with 'g'.
+    """
+
+    def __init__(self) -> None:
+        self._down_since: float | None = None
+        self._flip_since: float | None = None
+
+    def update(self, drone: Tello, fc: FlightController, now: float) -> str | None:
+        """Call once per control tick. Returns a status string when the flip
+        rule fires (after clearing fc.flying); otherwise None."""
+        if not fc.flying:
+            self._down_since = None
+            self._flip_since = None
+            return None
+        if drone.state_age() > 1.0:
+            self._down_since = None  # blind: assume nothing
+            self._flip_since = None
+            return None
+        st = drone.state
+        roll = st.get("roll", 0)
+        inverted = isinstance(roll, (int, float)) and abs(roll) >= FLIP_ROLL_DEG
+        if inverted:
+            if self._flip_since is None:
+                self._flip_since = now
+            if now - self._flip_since >= FLIP_HOLD_S:
+                fc.flying = False
+                fc.follow = False
+                fc.hover()
+                self._down_since = None
+                self._flip_since = None
+                return "CRASHED - flipped (t to relaunch)"
+        else:
+            self._flip_since = None
+        still = (st.get("h") == 0 and st.get("vgx") == 0
+                 and st.get("vgy") == 0 and st.get("vgz") == 0)
+        if still:
+            if self._down_since is None:
+                self._down_since = now
+        else:
+            self._down_since = None
+        return None
+
+    def down_hint(self, now: float) -> bool:
+        """True when telemetry has looked grounded for DOWN_HOLD_S while the
+        controller still believes airborne."""
+        return self._down_since is not None and now - self._down_since >= DOWN_HOLD_S
 
 
 def _try_land(drone: Tello) -> bool:
@@ -127,18 +206,23 @@ def _do_action(drone: Tello, fc: FlightController, action: str) -> str:
         fc.hover()  # so a held key can't fling it the instant it lifts
         fc.flying = True  # assume airborne even if the ok reply is lost
         fc.emergency = False  # a new takeoff re-arms after a motor cut
+        fc.follow = False  # every flight starts under manual control
         try:
             drone.send_command("takeoff", timeout=7)
             return "airborne"
         except TelloError:
             return "takeoff unconfirmed — assuming airborne; land with g"
     if action == "land":
-        fc.landing = True  # also set here for direct callers (FPV quit path)
+        fc.landing = True  # also set here for direct callers
+        fc.follow = False  # the tracker must not steer a descending drone
         fc.hover()
-        drone.send_rc(0, 0, 0, 0)
-        landed = _try_land(drone)
-        fc.flying = False
-        fc.landing = False
+        try:
+            drone.send_rc(0, 0, 0, 0)
+            landed = _try_land(drone)
+        finally:
+            # Even if the socket dies mid-land, steering must not stay frozen.
+            fc.flying = False
+            fc.landing = False
         return "landed" if landed else "land sent — verify the drone is down"
     if action == "flip":
         if not fc.flying:
@@ -157,6 +241,7 @@ def _do_action(drone: Tello, fc: FlightController, action: str) -> str:
         fc.flying = False
         fc.landing = False
         fc.emergency = True
+        fc.follow = False
         fc.hover()
         return "EMERGENCY STOP"
     return ""
@@ -188,6 +273,7 @@ class ActionRunner:
             with self._lock:
                 self._pending = None  # an emergency overrides anything queued
             self.last_result = _do_action(self._drone, self._fc, action)
+            self._drone.log.event("action", action=action, result=self.last_result)
             return
         with self._lock:
             landing = self._pending == "land" or self.busy_with == "land"
@@ -205,6 +291,18 @@ class ActionRunner:
             return f"{busy}..." + (f" (then: {pending})" if pending else "")
         return self.last_result
 
+    def wait_idle(self, timeout: float) -> bool:
+        """Block until nothing is pending or executing (or timeout). Lets the
+        FPV quit path drain the worker and land through the same code path as
+        pressing 'g', instead of racing it with a direct _do_action call."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._pending is None and self.busy_with is None:
+                    return True
+            time.sleep(0.05)
+        return False
+
     def _worker(self) -> None:
         while True:
             self._wake.wait()
@@ -213,8 +311,14 @@ class ActionRunner:
                 self._pending = None
                 self._wake.clear()
                 self.busy_with = action
-            result = _do_action(self._drone, self._fc, action) if action else ""
+            try:
+                result = _do_action(self._drone, self._fc, action) if action else ""
+            except Exception as e:
+                # A dead worker would silently hang every later action.
+                result = f"{action} failed: {e}"
             with self._lock:
                 self.busy_with = None
                 if action:
                     self.last_result = result
+            if action:
+                self._drone.log.event("action", action=action, result=result)

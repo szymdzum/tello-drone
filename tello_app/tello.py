@@ -20,6 +20,8 @@ import socket
 import threading
 import time
 
+from tello_app.flightlog import FlightLog, NullLog
+
 
 class TelloError(Exception):
     """Raised when a Tello command fails."""
@@ -42,9 +44,11 @@ class Tello:
     def __init__(self, ip: str | None = None, *,
                  remote_port: int | None = None,
                  local_port: int | None = None,
-                 state_port: int | None = None) -> None:
+                 state_port: int | None = None,
+                 log: FlightLog | NullLog | None = None) -> None:
         """Defaults talk to a real Tello. All addressing is overridable so tests
         can run the full protocol against a fake drone on localhost."""
+        self.log = log if log is not None else NullLog()
         self._tello_addr = (ip if ip is not None else self.TELLO_IP,
                             remote_port if remote_port is not None else self.COMMAND_PORT)
 
@@ -61,10 +65,13 @@ class Tello:
         self._state_socket.settimeout(3)
 
         self._state: dict[str, str | int | float] = {}
+        self._state_at = 0.0  # monotonic arrival time of the last state packet
         self._state_lock = threading.Lock()
         self._cmd_lock = threading.Lock()  # serializes in-flight commands across threads
         # Every datagram from the drone's command port, tagged with arrival time.
-        self._responses: queue.Queue[tuple[float, str]] = queue.Queue()
+        # Bounded: an rc-only session never calls send_command (the only consumer),
+        # so unsolicited packets must not accumulate forever.
+        self._responses: queue.Queue[tuple[float, str]] = queue.Queue(maxsize=64)
         self._running = True
         self._connected = False
         self._last_tx = time.monotonic()  # when anything was last sent to the drone
@@ -105,18 +112,19 @@ class Tello:
 
     def start_keepalive(self, interval: float = 5.0) -> None:
         """Keep a PARKED drone from idle-powering-off: send a zero `rc` when
-        the link has been quiet for `interval` s AND telemetry says height 0.
-        Ground-gated on purpose — airborne, the 15 s auto-land failsafe must
-        stay armed and pilot rc setpoints must not be overridden."""
+        the link has been quiet for `interval` s AND fresh telemetry says
+        height 0 (see grounded()). Ground-gated on purpose — airborne, the
+        15 s auto-land failsafe must stay armed and pilot rc setpoints must
+        not be overridden."""
         if self._keepalive_thread is not None:
             return
 
         def _loop() -> None:
             while self._running:
                 quiet = time.monotonic() - self._last_tx > interval
-                if self._connected and quiet and self.state.get("h", -1) == 0:
+                if self._connected and quiet and self.grounded():
                     try:
-                        self.send_rc(0, 0, 0, 0)
+                        self.send_rc(0, 0, 0, 0, src="keepalive")
                     except OSError:
                         break  # socket closed mid-send during shutdown
                 time.sleep(0.5)
@@ -130,6 +138,7 @@ class Tello:
         self._connected = False
         self._cmd_socket.close()
         self._state_socket.close()
+        self.log.close()
         print("✓ Disconnected")
 
     # ── Raw command interface ───────────────────────────────────
@@ -152,7 +161,16 @@ class Tello:
                 # boot banner / DJI_LOG spam. Never a reply to an SDK command,
                 # so it must not be matched as one.
                 continue
-            self._responses.put((time.monotonic(), text))
+            try:
+                self._responses.put_nowait((time.monotonic(), text))
+            except queue.Full:
+                # No consumer in a long rc-only session — drop the oldest;
+                # send_command would discard it as stale anyway.
+                try:
+                    self._responses.get_nowait()
+                except queue.Empty:
+                    pass
+                self._responses.put_nowait((time.monotonic(), text))
 
     def send_command(self, command: str, timeout: float | None = None) -> str:
         """Send a text command and wait for the response string.
@@ -179,18 +197,22 @@ class Tello:
                     received_at, response = self._responses.get(timeout=remaining)
                 except queue.Empty:
                     self._quarantine_until = time.monotonic() + self.REPLY_QUARANTINE
+                    self.log.event("cmd", cmd=command, error="timeout", timeout=timeout)
                     raise TelloError(
                         f"Timed out waiting for response to '{command}'") from None
                 if received_at >= sent_at:
                     break
                 # else: stale reply that arrived before this send — drop it
+                self.log.event("stale", text=response)
+            self.log.event("cmd", cmd=command, reply=response,
+                           rtt=round(received_at - sent_at, 4))
 
         if response.lower().startswith("error"):
             raise TelloError(f"Command '{command}' failed: {response}")
 
         return response
 
-    def send_rc(self, lr: int, fb: int, ud: int, yaw: int) -> None:
+    def send_rc(self, lr: int, fb: int, ud: int, yaw: int, src: str = "") -> None:
         """Send RC joystick-style control (no response expected).
 
         Args:
@@ -198,10 +220,14 @@ class Tello:
             fb:  forward/back   (-100 to 100)
             ud:  up/down        (-100 to 100)
             yaw: rotation       (-100 to 100)
+            src: who is steering ("keys"/"follow"/"keepalive") — log-only,
+                 so a follow-mode wobble is distinguishable from piloting.
         """
+        lr, fb, ud, yaw = (max(-100, min(100, v)) for v in (lr, fb, ud, yaw))
         cmd = f"rc {lr} {fb} {ud} {yaw}"
         self._cmd_socket.sendto(cmd.encode("utf-8"), self._tello_addr)
         self._last_tx = time.monotonic()
+        self.log.event("rc", lr=lr, fb=fb, ud=ud, yaw=yaw, src=src)
 
     # ── Control commands ────────────────────────────────────────
 
@@ -217,6 +243,7 @@ class Tello:
         """Kill motors immediately – drone will drop!"""
         self._cmd_socket.sendto(b"emergency", self._tello_addr)
         self._last_tx = time.monotonic()
+        self.log.event("emergency")
         print("🛑 EMERGENCY STOP")
 
     def stop(self) -> str:
@@ -317,6 +344,22 @@ class Tello:
         with self._state_lock:
             return dict(self._state)
 
+    def state_age(self) -> float:
+        """Seconds since the last state packet arrived (inf before the first)."""
+        with self._state_lock:
+            at = self._state_at
+        return time.monotonic() - at if at else float("inf")
+
+    def grounded(self, max_age: float = 1.0) -> bool:
+        """True only when telemetry younger than max_age says height 0.
+
+        Fails closed: no packets yet, a stalled state stream, or h > 0 all
+        mean "not provably grounded". Gate anything that would reset the
+        15 s auto-land failsafe (e.g. the parked-drone keepalive) on this."""
+        if self.state_age() > max_age:
+            return False
+        return self.state.get("h", -1) == 0
+
     def _state_receiver(self) -> None:
         """Background thread: receive and parse state packets."""
         while self._running:
@@ -327,6 +370,9 @@ class Tello:
                 parsed = self._parse_state(raw)
                 with self._state_lock:
                     self._state = parsed
+                    self._state_at = time.monotonic()
+                # dict form: packet keys are drone-controlled, not kwarg-safe
+                self.log.event_fields("state", parsed)
             except TimeoutError:
                 continue
             except OSError:

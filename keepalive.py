@@ -57,6 +57,14 @@ def keepalive(drone: Tello, interval: float, quiet: bool, ssid: str) -> None:
     misses = 0
     while True:
         ts = time.strftime("%H:%M:%S")
+        # Same rule as Tello.start_keepalive: never reset the 15 s auto-land
+        # failsafe on an airborne drone. Only FRESH telemetry can prove
+        # airborne; stale/absent telemetry means the link is probably down,
+        # and then the ping doubles as the probe that drives recovery below.
+        if drone.state_age() <= 1.0 and drone.state.get("h", 0) != 0:
+            print(f"[{ts}] drone reports airborne — heartbeat paused", flush=True)
+            time.sleep(interval)
+            continue
         try:
             batt = int(drone.send_command("battery?", timeout=3))
             misses = 0

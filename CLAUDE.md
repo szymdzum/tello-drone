@@ -41,10 +41,11 @@ Verifying connectivity before a run: `ping -c 3 192.168.10.1`.
 ## Architecture
 
 Everything is built on the `Tello` class in `tello_app/tello.py` — the single
-source of truth for the protocol. Layout: `tello_app/flight/` (controller + HUD
-content), `tello_app/video/stream.py` (H.264 decode), `tello_app/shells/`
-(fpv + repl front-ends), `drone.py` (entry point: connect once, dispatch to a
-shell, always `close()`).
+source of truth for the protocol. Layout: `tello_app/flight/` (controller, HUD
+content, follow-control math), `tello_app/video/stream.py` (H.264 decode),
+`tello_app/vision/face.py` (background face detector), `tello_app/flightlog.py`
+(JSONL flight recorder), `tello_app/shells/` (fpv + repl front-ends),
+`drone.py` (entry point: connect once, dispatch to a shell, always `close()`).
 
 **Three UDP channels** (all opened in `Tello.__init__`):
 - Command — send to `192.168.10.1:8889`, block for a text response. This is
@@ -71,9 +72,13 @@ shell, always `close()`).
 - The Tello **auto-lands after 15 s** of silence (`SAFETY_TIMEOUT`) and powers
   off after a few idle minutes. `Tello.start_keepalive()` (called by drone.py
   after connect) sends a zero `rc` when the link has been quiet for ~5 s **and
-  telemetry says the drone is on the ground (h == 0)**. The ground gate is
-  safety-critical: airborne, the heartbeat stays silent so the 15 s auto-land
+  `Tello.grounded()` holds: telemetry younger than 1 s says h == 0**. The
+  ground gate is safety-critical and fails closed (no/stale telemetry = not
+  grounded): airborne, the heartbeat stays silent so the 15 s auto-land
   failsafe remains armed and a pilot's rc setpoint is never overridden.
+  `keepalive.py` applies the same airborne rule but pings through *stale*
+  telemetry — there a dead link is the likely cause, and the ping doubles as
+  the probe that drives its reconnect logic.
 - `Tello(ip, remote_port=…, local_port=…, state_port=…)` exists so
   `tests/test_tello.py` can run the real protocol against a fake UDP drone on
   localhost — keep addressing injectable.
@@ -94,6 +99,55 @@ latency), else falls back to cv2's FFMPEG capture; either way decode runs on its
 own thread, latest-frame-wins. On macOS, **AWDL (AirDrop) stalls the Wi-Fi radio
 ~every second** — `drone.py` warns at startup (`tello_app/util.py`); fix is
 `sudo ifconfig awdl0 down`.
+
+**Face follow (`p` in FPV)** splits vision from control: `tello_app/vision/face.py`
+runs a Haar-cascade `FaceDetector` on its own latest-wins thread (same pattern
+as video decode — detection can never stall the control loop) and emits plain
+frame-fraction tuples; `tello_app/flight/tracking.py` is the pure P-controller
+(`FaceFollower`: yaw centers, ud levels, fb holds apparent size; never strafes,
+low caps) — stdlib-only and unit-tested in `tests/test_tracking.py`. Safety
+contracts: any stick key is an instant manual override (`fc.follow` cleared in
+`handle_key`), follow never steers while landing, takeoff/land/emergency all
+clear it, and a lost face coasts 0.5 s then hovers — it never searches.
+
+**Crash reconciliation** (`CrashMonitor` in `flight/controller.py`, polled by
+the FPV loop): after a crash, `fc.flying` goes stale-true (HUD claims AIRBORNE
+on the floor, and `t` is refused as "already airborne"). Two telemetry rules
+with deliberately different strengths — **flip** (fresh `|roll| >= 120°`
+**sustained ≥ 1 s** — a transient mid-air tumble transits >120° for under a
+second and the firmware recovers; firing on one sample cut the rc stream and
+set the drone adrift, the 2026-06-12 runaway) *clears* `fc.flying`, re-arms
+`t`, **and the FPV loop then submits a land** (a false fire must degrade to
+"drone lands", never "rc silently stops"; to a truly motors-cut drone the
+land is a harmless error reply); **grounded-looking** (h == 0 + zero velocity
+for 3 s) is *display-only* (amber `DOWN? (g)` in the HUD STATE cell — baro/VPS
+can misread, and a false 'landed' abandons a flying drone; the pilot resyncs
+with `g`). Both rules ignore stale telemetry. Validated by replaying both
+2026-06-12 incident logs: the inverted crash fires at t+1 s, the tumble never
+fires. Post-tumble note: baro `h` corrupts after violent motion (read −5 m);
+`tof` stayed sane.
+
+**Drift damper** (`drift_correction` in `flight/tracking.py`, applied by the
+FPV loop): when airborne with sticks quiet (and follow off / not landing),
+stream a small counter-command opposing the drone's reported lateral velocity
+(`vgx`/`vgy`, body frame) instead of pure zeros — the firmware's own position
+hold goes blind on featureless floors and drifts on room air while telemetry
+still reports the motion. Gentle on purpose (gain 4, cap ±25, 1 dm/s
+deadband, fresh telemetry only); any keypress overrides instantly. The sign
+convention (positive rc -> positive vg) was verified from the 2026-06-12
+session logs — do not flip it without re-deriving from flight data, a wrong
+sign turns the damper into positive feedback.
+
+**Flight recorder**: `drone.py` writes a JSONL log per session to `logs/`
+(gitignored; `--no-log` to disable). `tello_app/flightlog.py` is stdlib-only
+and **fail-silent — logging must never touch the flight path** (NullLog is the
+no-op stand-in, so call sites have no `if log` checks). Hook points: state
+packets (10 Hz), every command/reply with rtt (+ timeouts, stale replies),
+every rc send tagged with `src` (keys/follow/keepalive), actions, detections,
+follow-mode flips. `analyze.py` summarizes a log (battery drain, cmd rtt,
+airborne rc-stream gaps — the crash signature) and plots with `--plot` if
+matplotlib is installed. State-packet keys are drone-controlled: log them via
+`event_fields(type, dict)`, never as kwargs.
 
 The repl shell (`tello_app/shells/repl.py`) tracks `flying` state locally to
 decide whether to auto-land on quit — the drone itself isn't queried for this.

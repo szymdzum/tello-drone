@@ -13,6 +13,7 @@ run on the stdlib alone.
 """
 import argparse
 
+from tello_app.flightlog import NullLog, open_session_log
 from tello_app.tello import Tello, TelloError
 from tello_app.util import DEFAULT_SSID, ensure_on_tello, warn_if_awdl_active
 
@@ -25,6 +26,8 @@ def main() -> None:
     ap.add_argument("--ssid", default=DEFAULT_SSID,
                     help=f"Tello Wi-Fi to auto-join when not already on it "
                          f"(default {DEFAULT_SSID}; empty to disable)")
+    ap.add_argument("--no-log", action="store_true",
+                    help="disable the JSONL flight recorder (logs/)")
     args = ap.parse_args()
     mode = args.mode
 
@@ -41,8 +44,11 @@ def main() -> None:
     if not ensure_on_tello(args.ssid):
         print(f"Couldn't join {args.ssid or 'the Tello Wi-Fi'} — drone powered on? "
               "Trying to connect anyway...")
+    log = NullLog() if args.no_log else open_session_log()
+    if log.path:
+        print(f"Flight log: {log.path}")
     print("Connecting to Tello...")
-    drone = Tello()
+    drone = Tello(log=log)  # drone.close() also closes the log
     try:
         drone.connect(retries=3)
         drone.start_keepalive()  # ground-only — keeps a parked drone awake

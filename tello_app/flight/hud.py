@@ -14,7 +14,7 @@ from tello_app.tello import Tello
 # ASCII only — OpenCV's Hershey fonts render anything else as '?'.
 HELP_LINES = (
     "W/S fwd-back   A/D strafe   I/K up-down   J/L yaw   "
-    "t/g/f/h   y/u speed   SPACE emergency   Esc/q quit",
+    "t/g/f/h   y/u speed   p follow   SPACE emergency   Esc/q quit",
 )
 
 
@@ -44,4 +44,5 @@ def snapshot(drone: Tello, fc: FlightController) -> dict:
         "speed": fc.speed,
         "flying": fc.flying,
         "emergency": fc.emergency,
+        "follow": fc.follow,
     }

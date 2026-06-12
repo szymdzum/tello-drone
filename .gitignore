@@ -15,5 +15,8 @@ venv/
 # Captured stills / video from the FPV shell
 captures/
 
+# JSONL flight recorder output (data, not code)
+logs/
+
 # OS / editor
 .DS_Store

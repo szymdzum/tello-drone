@@ -102,6 +102,12 @@ class TestProtocol(unittest.TestCase):
         time.sleep(0.3)
         self.assertIn("rc 0 0 50 0", self.fake.received)
 
+    def test_send_rc_clamps_out_of_range_values(self):
+        # FlightController can't exceed ±100, but the REPL passes any int through.
+        self.drone.send_rc(0, 250, -250, 100)
+        time.sleep(0.3)
+        self.assertIn("rc 0 100 -100 100", self.fake.received)
+
 
 class TestKeepalive(unittest.TestCase):
     """start_keepalive must wake a quiet GROUNDED drone with zero rc, stay
@@ -118,9 +124,10 @@ class TestKeepalive(unittest.TestCase):
         self.drone.close()
         self.fake.close()
 
-    def _set_state(self, state):
+    def _set_state(self, state, age=0.0):
         with self.drone._state_lock:
             self.drone._state = state
+            self.drone._state_at = time.monotonic() - age
 
     def test_quiet_grounded_link_gets_rc_heartbeat(self):
         self._set_state({"h": 0})
@@ -136,6 +143,14 @@ class TestKeepalive(unittest.TestCase):
 
     def test_no_telemetry_means_no_heartbeat(self):
         # Without state packets we can't prove the drone is grounded — stay silent.
+        self.drone.start_keepalive(interval=0.2)
+        time.sleep(1.0)
+        self.assertNotIn("rc 0 0 0 0", self.fake.received)
+
+    def test_stale_grounded_telemetry_means_no_heartbeat(self):
+        # An old 'h: 0' from a stalled state stream proves nothing about the
+        # drone NOW — the gate must fail closed, not trust the last packet.
+        self._set_state({"h": 0}, age=5.0)
         self.drone.start_keepalive(interval=0.2)
         time.sleep(1.0)
         self.assertNotIn("rc 0 0 0 0", self.fake.received)
