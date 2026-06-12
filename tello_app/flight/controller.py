@@ -7,8 +7,8 @@ this module. Depends only on tello.py: no cv2, fully unit-testable.
 
 Key scheme:
     W/S forward/back   A/D strafe l/r   I/K up/down (throttle)   J/L yaw l/r
-    t takeoff · g land · f flip · h hover · y/u slower/faster · p follow face
-    SPACE emergency · Esc/q quit
+    t takeoff · g land · f flip · h hover · y/u slower/faster
+    p follow face · m marker hold · SPACE emergency · Esc/q quit
 """
 import threading
 import time
@@ -38,6 +38,7 @@ DISCRETES = {
     ord("y"): "speed_down", ord("Y"): "speed_down",
     ord("u"): "speed_up", ord("U"): "speed_up",
     ord("p"): "follow", ord("P"): "follow",
+    ord("m"): "marker", ord("M"): "marker",
     ord(" "): "emergency",
     27: "quit",                          # Esc
     ord("q"): "quit", ord("Q"): "quit",  # q alias (easy reach; Esc can be fiddly)
@@ -60,7 +61,19 @@ class FlightController:
         self.flying = False
         self.landing = False    # a commanded landing is in progress: steering frozen
         self.emergency = False  # motors were cut; cleared by the next takeoff
-        self.follow = False     # face-follow mode: a tracker steers instead of keys
+        # Autopilot mode: None (manual), "follow" (face), "marker" (ArUco hold).
+        # A tracker steers instead of keys; modes are mutually exclusive.
+        self.autopilot: str | None = None
+
+    @property
+    def follow(self) -> bool:
+        """Back-compat view of autopilot. Setting False clears ANY autopilot —
+        which is what every safety clearing site (land/emergency/crash) wants."""
+        return self.autopilot == "follow"
+
+    @follow.setter
+    def follow(self, value: bool) -> None:
+        self.autopilot = "follow" if value else None
 
     def handle_key(self, key: int, now: float) -> str | None:
         """Process one key. Returns a discrete action string (takeoff/land/flip/
@@ -69,19 +82,20 @@ class FlightController:
         if key in self.moves:
             if self.landing:
                 return None  # no steering during a commanded landing
-            self.follow = False  # any stick input = instant manual override
+            self.autopilot = None  # any stick input = instant manual override
             axis, sign = self.moves[key]
             self.vel[axis] = sign * self.speed
             self._last[axis] = now
             return None
         action = self.discretes.get(key)
-        if action == "follow":
-            self.follow = not self.follow
-            if self.follow:
+        if action in ("follow", "marker"):
+            # Toggle; engaging one replaces the other (mutually exclusive).
+            self.autopilot = None if self.autopilot == action else action
+            if self.autopilot:
                 self.hover()  # hand over from zero, not from a held key's velocity
             return None
         if action == "hover":
-            self.follow = False
+            self.autopilot = None
             self.hover()
             return None
         if action == "speed_down":

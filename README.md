@@ -16,6 +16,9 @@ What's in the box:
   yaw tape, virtual sticks, battery/telemetry panels)
 - **Face follow** — press `p` and the drone tracks you: Haar-cascade detection
   on a background thread feeding a P-controller; any stick key overrides
+- **Marker hold** — print [docs/marker0.png](docs/marker0.png) at 10 cm, press
+  `m`, and the drone locks position relative to the marker (ArUco detection,
+  same controller, metrically reliable target)
 - **Crash detection** — telemetry-based flip detection resyncs the controller
   when the drone ends up on its back (tuned against real crash logs)
 - **Drift damper** — when the sticks are quiet, the loop counters the drone's
@@ -50,7 +53,7 @@ give it focus** before flying. One hand per cluster:
 | `W` / `S` forward / back | `I` / `K` up / down (throttle) |
 | `A` / `D` strafe left / right | `J` / `L` yaw left / right |
 
-`t` takeoff · `g` land · `f` flip · `h` hover · `p` **follow face** · `y`/`u` speed · **SPACE** = **EMERGENCY stop (drone drops!)** · **Esc**/`q` quit (lands first).
+`t` takeoff · `g` land · `f` flip · `h` hover · `p` **follow face** · `m` **marker hold** · `y`/`u` speed · **SPACE** = **EMERGENCY stop (drone drops!)** · **Esc**/`q` quit (lands first).
 
 Hold a key to move; release and that axis coasts to a hover within ~0.5 s
 (tune `HOLD_S` / `RATE_S` in `tello_app/flight/controller.py`).

@@ -11,7 +11,7 @@ Controls:
     W / S  forward / back          A / D  strafe left / right
     I / K  up / down (throttle)    J / L  yaw left / right
     t takeoff   g land   f flip   h hover   y / u  slower / faster
-    p = follow face (any stick key = manual override)
+    p = follow face   m = marker hold (any stick key = manual override)
     SPACE = EMERGENCY (drops!)               Esc / q = quit (lands first)
 
 Requires opencv-python (cv2) + numpy. Video decode runs on a background thread
@@ -30,11 +30,12 @@ from tello_app.flight.controller import (
     CrashMonitor,
     FlightController,
 )
-from tello_app.flight.tracking import FaceFollower, drift_correction
+from tello_app.flight.tracking import FaceFollower, drift_correction, marker_holder
 from tello_app.shells import hud_render
 from tello_app.tello import Tello
 from tello_app.video.stream import VideoStream
 from tello_app.vision.face import FaceDetector
+from tello_app.vision.marker import MarkerDetector
 
 
 def _draw_overlay(frame, drone: Tello, fc: FlightController,
@@ -49,9 +50,12 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
     runner = ActionRunner(drone, fc)
     detector = FaceDetector(video, log=drone.log)
     detector.start()
+    markers = MarkerDetector(video, log=drone.log)
+    markers.start()
     follower = FaceFollower()
+    holder = marker_holder()
     monitor = CrashMonitor()
-    was_follow = False
+    was_autopilot = None
     was_down = False
     runner.last_result = "press 't' to take off"
     win = "Tello FPV"
@@ -70,14 +74,17 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
                 frame = boot.copy()
             lr, fb, ud, yaw = fc.tick(now)
             det = detector.latest()
-            # Follow only steers airborne and never during a commanded landing
-            # (fc.landing is set the instant 'g' is submitted, before the
-            # worker runs — the same freeze manual steering gets).
-            following = fc.follow and fc.flying and not fc.landing
-            if following:
+            mdet = markers.latest()
+            # Autopilot only steers airborne and never during a commanded
+            # landing (fc.landing is set the instant 'g' is submitted, before
+            # the worker runs — the same freeze manual steering gets).
+            ap = fc.autopilot if fc.flying and not fc.landing else None
+            if ap == "follow":
                 lr, fb, ud, yaw = follower.update(det, now)
+            elif ap == "marker":
+                lr, fb, ud, yaw = holder.update(mdet, now)
             damping = False
-            if (not following and fc.flying and not fc.landing
+            if (ap is None and fc.flying and not fc.landing
                     and (lr, fb, ud, yaw) == (0, 0, 0, 0)
                     and drone.state_age() <= 0.5):
                 # Sticks quiet: counter reported drift instead of streaming
@@ -85,9 +92,9 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
                 st = drone.state
                 lr, fb, ud, yaw = drift_correction(st.get("vgx"), st.get("vgy"))
                 damping = lr != 0 or fb != 0
-            if fc.follow != was_follow:
-                drone.log.event("mode", follow=fc.follow)
-                was_follow = fc.follow
+            if fc.autopilot != was_autopilot:
+                drone.log.event("mode", autopilot=fc.autopilot)
+                was_autopilot = fc.autopilot
             # Crash reconciliation: a flip clears fc.flying (stops the rc
             # stream this tick); grounded-looking telemetry only flags the HUD.
             crash_msg = monitor.update(drone, fc, now)
@@ -104,10 +111,16 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
                 was_down = down
             box = detector.box()
             if box is not None:
-                hud_render.draw_face(frame, box, fc.follow)
+                hud_render.draw_face(frame, box, fc.autopilot == "follow")
+            mc = markers.corners()
+            if mc is not None:
+                quad, mid = mc
+                hud_render.draw_marker(frame, quad, fc.autopilot == "marker", mid)
+            # Badge lock = the ACTIVE mode's target is in sight.
+            locked = (mdet if fc.autopilot == "marker" else det) is not None
             # HUD draws on the boot screen too — keys are live, never fly blind.
             _draw_overlay(frame, drone, fc, runner.display(), (lr, fb, ud, yaw),
-                          face_locked=det is not None, down_hint=down)
+                          face_locked=locked, down_hint=down)
             cv2.imshow(win, frame)
 
             key = cv2.waitKey(1) & 0xFF  # also pumps the GUI; 255 == no key
@@ -120,11 +133,12 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
 
             # Sticks stream while airborne; grounded, Tello.start_keepalive owns the link.
             if fc.flying and now - last_rc >= RATE_S:
-                src = "follow" if following else "damp" if damping else "keys"
+                src = ap if ap else "damp" if damping else "keys"
                 drone.send_rc(lr, fb, ud, yaw, src=src)
                 last_rc = now
     finally:
         detector.stop()
+        markers.stop()
         # Drain the worker first: a takeoff submitted just before quit must
         # finish (setting fc.flying) before we decide whether to land.
         runner.wait_idle(10)

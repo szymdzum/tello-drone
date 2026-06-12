@@ -242,14 +242,23 @@ def draw_face(frame, box, following: bool) -> None:
         _text(frame, "LOCK", (x, y - 8), 0.45, color)
 
 
-def _follow_badge(frame, w, locked: bool) -> None:
-    """FOLLOW mode indicator under the yaw tape."""
-    label = "FOLLOW" if locked else "FOLLOW (no face)"
+def _autopilot_badge(frame, w, locked: bool, mode: str) -> None:
+    """Autopilot mode indicator under the yaw tape (FOLLOW / MARKER)."""
+    label = mode.upper() if locked else f"{mode.upper()} (no target)"
     color = OK if locked else WARN
     lw = _width(label, 0.5, 1)
     x0 = (w - lw) // 2 - 12
     _panel(frame, x0, 74, x0 + lw + 24, 100, stroke=color)
     _text(frame, label, ((w - lw) // 2, 92), 0.5, color)
+
+
+def draw_marker(frame, corners, locked: bool, marker_id: int) -> None:
+    """ArUco marker outline; cyan = seen, green = actively holding on it."""
+    color = OK if locked else CYAN
+    pts = corners.reshape(-1, 1, 2)
+    cv2.polylines(frame, [pts], True, color, 2, cv2.LINE_AA)
+    x, y = int(corners[:, 0].min()), int(corners[:, 1].min())
+    _text(frame, f"M{marker_id}" + (" LOCK" if locked else ""), (x, y - 8), 0.45, color)
 
 
 # ── State variants ──────────────────────────────────────────
@@ -297,8 +306,8 @@ def draw(frame, snap: dict, rc: tuple[int, int, int, int], status: str,
     _stick(frame, w - 112, h - 136, 60, yaw_in, ud, ("UP", "DOWN", "L", "R"),
            snap["flying"])
     _status_bar(frame, snap, status, w, h, emergency, down_hint)
-    if snap.get("follow"):
-        _follow_badge(frame, w, face_locked)
+    if snap.get("autopilot"):
+        _autopilot_badge(frame, w, face_locked, snap["autopilot"])
 
     if emergency:
         _emergency_overlay(frame, w, h)

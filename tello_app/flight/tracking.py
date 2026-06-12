@@ -52,14 +52,26 @@ def drift_correction(vgx, vgy) -> tuple[int, int, int, int]:
     return (lr, fb, 0, 0)
 
 
+# Marker hold (press 'm'): the same controller, tighter size band — a 10 cm
+# printed marker (docs/marker0.png) at the ~1 m hold distance spans only ~6%
+# of the frame width, so the face deadband would swallow the distance error.
+MARKER_TARGET_W = 0.06
+MARKER_FB_DEADBAND = 0.012
+
+
 class FaceFollower:
-    """Latest detection + lost-face timeout -> (lr, fb, ud, yaw) velocities.
+    """Latest detection + lost-target timeout -> (lr, fb, ud, yaw) velocities.
 
-    Lost-face behavior: hold the last command for LOST_HOLD_S (detector
-    flicker must not stutter the flight), then hover. It never searches —
-    a blind drone that wanders is how you hit a wall."""
+    Works for any centered-box target: faces by default; marker_holder()
+    builds one tuned for ArUco hold. Lost-target behavior: hold the last
+    command for LOST_HOLD_S (detector flicker must not stutter the flight),
+    then hover. It never searches — a blind drone that wanders is how you
+    hit a wall."""
 
-    def __init__(self) -> None:
+    def __init__(self, target_w: float = TARGET_W,
+                 fb_deadband: float = FB_DEADBAND) -> None:
+        self._target_w = target_w
+        self._fb_deadband = fb_deadband
         self._last_seen = 0.0
         self._vel = (0, 0, 0, 0)
 
@@ -70,8 +82,13 @@ class FaceFollower:
             return self._vel
         self._last_seen = now
         cx, cy, w = det
-        yaw = _axis(cx - 0.5, YAW_GAIN, DEADBAND, MAX_YAW)   # face right -> yaw right
-        ud = _axis(0.5 - cy, UD_GAIN, DEADBAND, MAX_UD)      # face high -> climb
-        fb = _axis(TARGET_W - w, FB_GAIN, FB_DEADBAND, MAX_FB)  # face small -> approach
+        yaw = _axis(cx - 0.5, YAW_GAIN, DEADBAND, MAX_YAW)   # target right -> yaw right
+        ud = _axis(0.5 - cy, UD_GAIN, DEADBAND, MAX_UD)      # target high -> climb
+        fb = _axis(self._target_w - w, FB_GAIN, self._fb_deadband, MAX_FB)
         self._vel = (0, fb, ud, yaw)
         return self._vel
+
+
+def marker_holder() -> FaceFollower:
+    """Position hold relative to a printed ArUco marker (see vision/marker.py)."""
+    return FaceFollower(target_w=MARKER_TARGET_W, fb_deadband=MARKER_FB_DEADBAND)

@@ -106,15 +106,21 @@ own thread, latest-frame-wins. On macOS, **AWDL (AirDrop) stalls the Wi-Fi radio
 ~every second** — `drone.py` warns at startup (`tello_app/util.py`); fix is
 `sudo ifconfig awdl0 down`.
 
-**Face follow (`p` in FPV)** splits vision from control: `tello_app/vision/face.py`
-runs a Haar-cascade `FaceDetector` on its own latest-wins thread (same pattern
-as video decode — detection can never stall the control loop) and emits plain
-frame-fraction tuples; `tello_app/flight/tracking.py` is the pure P-controller
-(`FaceFollower`: yaw centers, ud levels, fb holds apparent size; never strafes,
-low caps) — stdlib-only and unit-tested in `tests/test_tracking.py`. Safety
-contracts: any stick key is an instant manual override (`fc.follow` cleared in
-`handle_key`), follow never steers while landing, takeoff/land/emergency all
-clear it, and a lost face coasts 0.5 s then hovers — it never searches.
+**Autopilot modes — face follow (`p`) and marker hold (`m`)** split vision
+from control: `tello_app/vision/face.py` (Haar cascade) and
+`tello_app/vision/marker.py` (ArUco 4x4_50, largest-marker-wins; print
+`docs/marker0.png` at 10 cm) each run on their own latest-wins thread (same
+pattern as video decode — detection can never stall the control loop) and emit
+plain frame-fraction tuples; `tello_app/flight/tracking.py` is the pure
+P-controller (`FaceFollower`: yaw centers, ud levels, fb holds apparent size;
+never strafes, low caps — `marker_holder()` is the same controller with a
+tighter size band) — stdlib-only and unit-tested in `tests/test_tracking.py`.
+Modes live in `fc.autopilot` (None/"follow"/"marker", mutually exclusive);
+`fc.follow` survives as a compat property whose setter `False` clears ANY
+autopilot — which is what every safety site wants. Safety contracts: any
+stick key is an instant manual override, autopilot never steers while
+landing, takeoff/land/emergency all clear it, and a lost target coasts 0.5 s
+then hovers — it never searches.
 
 **Crash reconciliation** (`CrashMonitor` in `flight/controller.py`, polled by
 the FPV loop): after a crash, `fc.flying` goes stale-true (HUD claims AIRBORNE

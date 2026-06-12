@@ -132,5 +132,59 @@ class TestFollowMode(unittest.TestCase):
             self.assertFalse(fc.follow, f"{action} left follow engaged")
 
 
+class TestAutopilotModes(unittest.TestCase):
+    """'p' (follow) and 'm' (marker hold) are mutually exclusive autopilot
+    modes; any stick key or safety action clears whichever is engaged."""
+
+    def test_m_toggles_marker_hold(self):
+        fc = FlightController()
+        self.assertIsNone(fc.handle_key(ord("m"), 0.0))
+        self.assertEqual(fc.autopilot, "marker")
+        fc.handle_key(ord("m"), 0.0)
+        self.assertIsNone(fc.autopilot)
+
+    def test_modes_are_mutually_exclusive(self):
+        fc = FlightController()
+        fc.handle_key(ord("p"), 0.0)
+        fc.handle_key(ord("m"), 0.0)   # replaces follow, not stacks
+        self.assertEqual(fc.autopilot, "marker")
+        fc.handle_key(ord("p"), 0.0)
+        self.assertEqual(fc.autopilot, "follow")
+
+    def test_stick_key_clears_marker_hold(self):
+        fc = FlightController(speed=50)
+        fc.handle_key(ord("m"), 0.0)
+        fc.handle_key(ord("w"), 0.0)
+        self.assertIsNone(fc.autopilot)
+        self.assertEqual(fc.tick(0.0)[1], 50)
+
+    def test_safety_actions_clear_marker_hold(self):
+        for action in ("takeoff", "land", "emergency"):
+            fc = FlightController()
+            fc.flying = action != "takeoff"
+            fc.autopilot = "marker"
+            fcmod._do_action(MagicMock(), fc, action)
+            self.assertIsNone(fc.autopilot, f"{action} left marker hold engaged")
+
+    def test_follow_property_back_compat(self):
+        fc = FlightController()
+        fc.follow = True
+        self.assertEqual(fc.autopilot, "follow")
+        fc.autopilot = "marker"
+        self.assertFalse(fc.follow)
+        fc.follow = False              # safety sites: clears ANY autopilot
+        self.assertIsNone(fc.autopilot)
+
+    def test_marker_holder_uses_tighter_size_band(self):
+        # a marker at 4% width (slightly far) must produce approach, even
+        # though the face deadband would swallow an error this small
+        holder = tracking.marker_holder()
+        _, fb, _, _ = holder.update((0.5, 0.5, 0.04), 0.0)
+        self.assertGreater(fb, 0)
+        # and at the target width it hovers
+        self.assertEqual(holder.update((0.5, 0.5, tracking.MARKER_TARGET_W), 1.0),
+                         (0, 0, 0, 0))
+
+
 if __name__ == "__main__":
     unittest.main()
