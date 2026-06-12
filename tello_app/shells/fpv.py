@@ -35,6 +35,7 @@ from tello_app.flight.tracking import FaceFollower, drift_correction, marker_hol
 from tello_app.shells import hud_render
 from tello_app.tello import Tello
 from tello_app.video.stream import VideoStream
+from tello_app.vision.disc import DiscDetector
 from tello_app.vision.face import FaceDetector
 from tello_app.vision.marker import MarkerDetector
 
@@ -67,6 +68,8 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
     detector.start()
     markers = MarkerDetector(video, log=drone.log)
     markers.start()
+    discs = DiscDetector(video, log=drone.log)
+    discs.start()
     follower = FaceFollower()
     holder = marker_holder()
     monitor = CrashMonitor()
@@ -137,6 +140,7 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
             if mc is not None:
                 quad, mid = mc
                 hud_render.draw_marker(frame, quad, fc.autopilot == "marker", mid)
+            hud_render.draw_discs(frame, discs.boxes())
             # Badge lock = the ACTIVE mode's target is in sight.
             locked = (mdet if fc.autopilot == "marker" else det) is not None
             # HUD draws on the boot screen too — keys are live, never fly blind.
@@ -163,6 +167,7 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
     finally:
         detector.stop()
         markers.stop()
+        discs.stop()
         # Drain the worker first: a takeoff submitted just before quit must
         # finish (setting fc.flying) before we decide whether to land.
         runner.wait_idle(10)

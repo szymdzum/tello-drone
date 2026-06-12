@@ -252,6 +252,16 @@ def _autopilot_badge(frame, w, locked: bool, mode: str) -> None:
     _text(frame, label, ((w - lw) // 2, 92), 0.5, color)
 
 
+def draw_discs(frame, boxes) -> None:
+    """Floor-disc detections: ellipse outlines, nearest labelled. Display-only
+    for now — the objective mission will steer on these later."""
+    for i, (x, y, w, h) in enumerate(boxes):
+        cv2.ellipse(frame, (x + w // 2, y + h // 2), (w // 2 + 4, h // 2 + 4),
+                    0, 0, 360, CYAN, 2, cv2.LINE_AA)
+        if i == 0:
+            _text(frame, "DISC", (x, y - 8), 0.45, CYAN)
+
+
 def draw_marker(frame, corners, locked: bool, marker_id: int) -> None:
     """ArUco marker outline; cyan = seen, green = actively holding on it."""
     color = OK if locked else CYAN
