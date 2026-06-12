@@ -52,12 +52,14 @@ def drift_correction(vgx, vgy) -> tuple[int, int, int, int]:
     return (lr, fb, 0, 0)
 
 
-# Marker hold (press 'm'): the same controller, tighter size band — a 10 cm
-# printed marker (docs/marker0.png) at the ~1 m hold distance spans only ~6%
-# of the frame width, so the face deadband would swallow the distance error.
-MARKER_TARGET_W = 0.06
+# Marker hold (press 'm'): the same controller with a tighter size band (a
+# marker at hold distance spans only a few % of frame width) and the target
+# size CAPTURED at engagement — hold distance is wherever the drone was when
+# 'm' was pressed, independent of the physical marker size (phone vs print).
 MARKER_FB_DEADBAND = 0.012
-LR_GAIN = 90       # strafe-centering gain (marker hold)
+CAPTURE_W_MIN = 0.03   # captured setpoint clamps: engaging from very far makes
+CAPTURE_W_MAX = 0.20   # distance control noisy; very close is just unsafe
+LR_GAIN = 90           # strafe-centering gain (marker hold)
 MAX_LR = 30
 
 
@@ -70,7 +72,7 @@ class FaceFollower:
     then hover. It never searches — a blind drone that wanders is how you
     hit a wall."""
 
-    def __init__(self, target_w: float = TARGET_W,
+    def __init__(self, target_w: float | None = TARGET_W,
                  fb_deadband: float = FB_DEADBAND,
                  strafe_centering: bool = False) -> None:
         """strafe_centering: correct horizontal error with lr instead of yaw.
@@ -79,12 +81,23 @@ class FaceFollower:
         any sideways drift becomes a runaway orbit around the target (the
         2026-06-12 screen-test incident; VPS was blind so the drift damper saw
         zeros). Strafe opposes translation directly; heading stays put. Faces
-        keep yaw-centering — a follower should turn to face a moving person."""
+        keep yaw-centering — a follower should turn to face a moving person.
+
+        target_w=None: capture the setpoint from the first detection — 'hold
+        the distance at which you engaged'. reset() re-arms the capture."""
         self._target_w = target_w
+        self._capture = target_w is None
         self._fb_deadband = fb_deadband
         self._strafe = strafe_centering
         self._last_seen = 0.0
         self._vel = (0, 0, 0, 0)
+
+    def reset(self) -> None:
+        """Fresh engagement: drop coast state and re-arm setpoint capture."""
+        self._last_seen = 0.0
+        self._vel = (0, 0, 0, 0)
+        if self._capture:
+            self._target_w = None
 
     def update(self, det: Detection | None, now: float) -> tuple[int, int, int, int]:
         if det is None:
@@ -93,6 +106,8 @@ class FaceFollower:
             return self._vel
         self._last_seen = now
         cx, cy, w = det
+        if self._target_w is None:
+            self._target_w = min(max(w, CAPTURE_W_MIN), CAPTURE_W_MAX)
         if self._strafe:
             lr = _axis(cx - 0.5, LR_GAIN, DEADBAND, MAX_LR)  # target right -> strafe right
             yaw = 0
@@ -106,6 +121,7 @@ class FaceFollower:
 
 
 def marker_holder() -> FaceFollower:
-    """Position hold relative to a printed ArUco marker (see vision/marker.py)."""
-    return FaceFollower(target_w=MARKER_TARGET_W, fb_deadband=MARKER_FB_DEADBAND,
+    """Position hold relative to an ArUco marker (see vision/marker.py):
+    strafe-centered, holding the distance at which 'm' was pressed."""
+    return FaceFollower(target_w=None, fb_deadband=MARKER_FB_DEADBAND,
                         strafe_centering=True)

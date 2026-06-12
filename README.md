@@ -16,9 +16,10 @@ What's in the box:
   yaw tape, virtual sticks, battery/telemetry panels)
 - **Face follow** — press `p` and the drone tracks you: Haar-cascade detection
   on a background thread feeding a P-controller; any stick key overrides
-- **Marker hold** — print [docs/marker0.png](docs/marker0.png) at 10 cm, press
-  `m`, and the drone locks position relative to the marker (ArUco detection,
-  same controller, metrically reliable target)
+- **Marker hold** — show [docs/marker0.png](docs/marker0.png) (printed, or just
+  on a phone screen), park the drone where you want it, press `m`: it locks
+  that position relative to the marker (ArUco detection, strafe-centered,
+  distance setpoint captured at engagement)
 - **Crash detection** — telemetry-based flip detection resyncs the controller
   when the drone ends up on its back (tuned against real crash logs)
 - **Drift damper** — when the sticks are quiet, the loop counters the drone's

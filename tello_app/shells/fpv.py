@@ -75,6 +75,15 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
             lr, fb, ud, yaw = fc.tick(now)
             det = detector.latest()
             mdet = markers.latest()
+            if fc.autopilot != was_autopilot:
+                # Fresh engagement BEFORE steering: marker hold captures its
+                # distance setpoint from the first detection it sees.
+                if fc.autopilot == "marker":
+                    holder.reset()
+                elif fc.autopilot == "follow":
+                    follower.reset()
+                drone.log.event("mode", autopilot=fc.autopilot)
+                was_autopilot = fc.autopilot
             # Autopilot only steers airborne and never during a commanded
             # landing (fc.landing is set the instant 'g' is submitted, before
             # the worker runs — the same freeze manual steering gets).
@@ -92,9 +101,6 @@ def fly(drone: Tello, video: VideoStream, fc: FlightController) -> None:
                 st = drone.state
                 lr, fb, ud, yaw = drift_correction(st.get("vgx"), st.get("vgy"))
                 damping = lr != 0 or fb != 0
-            if fc.autopilot != was_autopilot:
-                drone.log.event("mode", autopilot=fc.autopilot)
-                was_autopilot = fc.autopilot
             # Crash reconciliation: a flip clears fc.flying (stops the rc
             # stream this tick); grounded-looking telemetry only flags the HUD.
             crash_msg = monitor.update(drone, fc, now)

@@ -118,7 +118,10 @@ differs BY DESIGN: faces center with yaw (turn to face a moving person);
 markers center with strafe and hold heading (`marker_holder()`) — yaw cannot
 counter lateral translation, so yaw-centering a static target is structurally
 unstable (runaway orbit; the 2026-06-12 screen-test incident, where blind VPS
-also hid the drift from telemetry). MarkerDetector takes an id allowlist
+also hid the drift from telemetry). Marker hold captures its distance setpoint
+from the first detection after engagement ("hold where 'm' was pressed" —
+independent of physical marker size; clamped, re-armed by `reset()` which the
+FPV loop calls on every mode transition). MarkerDetector takes an id allowlist
 (default `{0}`) — scene texture can decode as a phantom marker (id 17 that
 same flight).
 Modes live in `fc.autopilot` (None/"follow"/"marker", mutually exclusive);

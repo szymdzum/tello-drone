@@ -179,10 +179,11 @@ class TestAutopilotModes(unittest.TestCase):
         """The orbit incident: yaw cannot counter lateral translation, so a
         static target must be centered by strafing with heading held."""
         holder = tracking.marker_holder()
-        lr, _, _, yaw = holder.update((0.7, 0.5, tracking.MARKER_TARGET_W), 0.0)
+        holder.update((0.5, 0.5, 0.08), 0.0)   # engage: captures setpoint
+        lr, _, _, yaw = holder.update((0.7, 0.5, 0.08), 0.1)
         self.assertGreater(lr, 0)   # marker right of center -> strafe right
         self.assertEqual(yaw, 0)    # heading stays put
-        lr, _, _, yaw = holder.update((0.3, 0.5, tracking.MARKER_TARGET_W), 0.1)
+        lr, _, _, yaw = holder.update((0.3, 0.5, 0.08), 0.2)
         self.assertLess(lr, 0)
         self.assertEqual(yaw, 0)
 
@@ -191,15 +192,39 @@ class TestAutopilotModes(unittest.TestCase):
         self.assertEqual(lr, 0)
         self.assertGreater(yaw, 0)
 
-    def test_marker_holder_uses_tighter_size_band(self):
-        # a marker at 4% width (slightly far) must produce approach, even
-        # though the face deadband would swallow an error this small
+    def test_marker_holder_holds_engagement_distance(self):
+        """The screen-test follow-up: hold distance is wherever the drone was
+        when 'm' was pressed — the first detection IS the setpoint."""
         holder = tracking.marker_holder()
-        _, fb, _, _ = holder.update((0.5, 0.5, 0.04), 0.0)
+        # engage with the marker at 8% width: that's now the target -> hover
+        self.assertEqual(holder.update((0.5, 0.5, 0.08), 0.0), (0, 0, 0, 0))
+        # drone pushed back (marker looks smaller) -> approach
+        _, fb, _, _ = holder.update((0.5, 0.5, 0.06), 0.1)
         self.assertGreater(fb, 0)
-        # and at the target width it hovers
-        self.assertEqual(holder.update((0.5, 0.5, tracking.MARKER_TARGET_W), 1.0),
-                         (0, 0, 0, 0))
+        # drone pushed forward (marker looks bigger) -> back off
+        _, fb, _, _ = holder.update((0.5, 0.5, 0.10), 0.2)
+        self.assertLess(fb, 0)
+
+    def test_reset_recaptures_the_setpoint(self):
+        holder = tracking.marker_holder()
+        holder.update((0.5, 0.5, 0.08), 0.0)
+        holder.reset()  # disengage + re-engage somewhere else
+        self.assertEqual(holder.update((0.5, 0.5, 0.12), 1.0), (0, 0, 0, 0))
+
+    def test_capture_is_clamped_to_sane_range(self):
+        # engaging from very far: target clamps to CAPTURE_W_MIN, so the
+        # drone closes in to a controllable distance rather than holding it
+        holder = tracking.marker_holder()
+        _, fb, _, _ = holder.update((0.5, 0.5, 0.01), 0.0)
+        self.assertGreater(fb, 0)
+
+    def test_marker_holder_uses_tighter_size_band(self):
+        # a 1.5%-width distance error must produce a correction, even though
+        # the face deadband (3%) would swallow it
+        holder = tracking.marker_holder()
+        holder.update((0.5, 0.5, 0.08), 0.0)
+        _, fb, _, _ = holder.update((0.5, 0.5, 0.065), 0.1)
+        self.assertGreater(fb, 0)
 
 
 if __name__ == "__main__":
