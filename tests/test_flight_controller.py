@@ -95,15 +95,30 @@ class TestActionExecution(unittest.TestCase):
         self.assertEqual(fc.tick(0.0), (0, 0, 0, 0))  # not flung forward
 
     def test_takeoff_stays_airborne_when_reply_is_lost(self):
-        """The crash bug: a takeoff whose 'ok' is lost MUST stay flying, so the
+        """The crash bug: a takeoff whose 'ok' is LOST must stay flying, so the
         loop keeps streaming rc instead of abandoning an airborne drone."""
-        from tello_app.tello import TelloError
+        from tello_app.tello import TelloTimeout
         fc = FlightController()
         drone = self._fake_drone()
-        drone.send_command.side_effect = TelloError("Timed out")
+        drone.send_command.side_effect = TelloTimeout("Timed out")
         msg = fcmod._do_action(drone, fc, "takeoff")
         self.assertTrue(fc.flying)
         self.assertIn("airborne", msg.lower())
+
+    def test_takeoff_refused_clears_flying(self):
+        """The refused-takeoff incident: an explicit 'error' reply means the
+        drone is definitively grounded — flying must clear so the pilot's
+        retry isn't eaten by 'already airborne'."""
+        from tello_app.tello import TelloError
+        fc = FlightController()
+        drone = self._fake_drone()
+        drone.send_command.side_effect = TelloError("Command 'takeoff' failed: error")
+        msg = fcmod._do_action(drone, fc, "takeoff")
+        self.assertFalse(fc.flying)
+        self.assertIn("refused", msg)
+        # and the retry actually retries instead of being swallowed
+        drone.send_command.side_effect = None
+        self.assertEqual(fcmod._do_action(drone, fc, "takeoff"), "airborne")
 
     def test_takeoff_ignored_when_already_flying(self):
         fc = FlightController()

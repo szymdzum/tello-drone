@@ -63,9 +63,15 @@ content, follow-control math), `tello_app/video/stream.py` (H.264 decode),
   discards any reply that arrived *before* its own send. This is what prevents a
   late reply to a timed-out command from desyncing the next request — never
   revert to inline `recvfrom`.
-- `send_command()` raises `TelloError` on any response starting with `error`.
-  Read commands (`battery?`, etc.) return the raw string; helpers like
-  `get_battery()` cast it.
+- `send_command()` raises `TelloError` on any response starting with `error`,
+  and the subclass `TelloTimeout` when no reply arrives. The distinction is
+  flight-critical for takeoff: a timeout means *maybe airborne* (keep
+  `flying=True`, never abandon a climbing drone), an explicit `error` means
+  the drone REFUSED and is definitively grounded (`flying=False`, or retries
+  get eaten by "already airborne" — the 2026-06-12 refused-takeoff incident;
+  refusals are typically IMU upset after a crash → power-cycle on a flat
+  surface). Read commands (`battery?`, etc.) return the raw string; helpers
+  like `get_battery()` cast it.
 - Fire-and-forget commands (`send_rc`, `emergency`) bypass the
   request/response path — they `sendto` directly with **no** wait, because the
   drone does not reply to them.

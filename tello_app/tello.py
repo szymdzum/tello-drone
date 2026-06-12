@@ -27,6 +27,12 @@ class TelloError(Exception):
     """Raised when a Tello command fails."""
 
 
+class TelloTimeout(TelloError):
+    """No reply within the timeout — the command MAY still have executed
+    (a lost 'ok' is common once video congests the link). Callers that care
+    must treat this as 'unknown', distinct from an explicit error reply."""
+
+
 class Tello:
     """Low-level Tello drone controller over UDP."""
 
@@ -198,7 +204,7 @@ class Tello:
                 except queue.Empty:
                     self._quarantine_until = time.monotonic() + self.REPLY_QUARANTINE
                     self.log.event("cmd", cmd=command, error="timeout", timeout=timeout)
-                    raise TelloError(
+                    raise TelloTimeout(
                         f"Timed out waiting for response to '{command}'") from None
                 if received_at >= sent_at:
                     break

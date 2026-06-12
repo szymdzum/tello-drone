@@ -13,7 +13,7 @@ Key scheme:
 import threading
 import time
 
-from tello_app.tello import Tello, TelloError
+from tello_app.tello import Tello, TelloError, TelloTimeout
 
 RATE_S = 0.05      # rc send period (~20 Hz)
 HOLD_S = 0.5       # how long an axis stays active after its last keypress.
@@ -210,8 +210,17 @@ def _do_action(drone: Tello, fc: FlightController, action: str) -> str:
         try:
             drone.send_command("takeoff", timeout=7)
             return "airborne"
-        except TelloError:
+        except TelloTimeout:
+            # Reply lost — the drone may well be climbing. Keep flying=True:
+            # a false 'landed' abandons an airborne drone.
             return "takeoff unconfirmed — assuming airborne; land with g"
+        except TelloError:
+            # Explicit 'error' reply: the drone REFUSED (IMU upset after a
+            # crash, tilted surface, overheat). It is definitively grounded —
+            # leaving flying=True here ate the pilot's retries as 'already
+            # airborne' (2026-06-12 refused-takeoff incident).
+            fc.flying = False
+            return "takeoff refused — power-cycle on a flat surface"
     if action == "land":
         fc.landing = True  # also set here for direct callers
         fc.follow = False  # the tracker must not steer a descending drone
