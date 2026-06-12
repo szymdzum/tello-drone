@@ -1,8 +1,28 @@
 # Tello Drone Controller
 
-Control a Ryze Tello drone via Python using raw UDP sockets. The protocol core
-is stdlib-only; FPV flight needs `opencv-python` + `numpy` (+ optionally `av`
-for lower-latency video decode).
+[![CI](https://github.com/szymdzum/tello-drone/actions/workflows/ci.yml/badge.svg)](https://github.com/szymdzum/tello-drone/actions/workflows/ci.yml)
+
+Fly a Ryze/DJI Tello from scratch — raw UDP sockets, no drone framework. The
+protocol core is stdlib-only; FPV flight needs `opencv-python` + `numpy`
+(+ optionally `av` for lower-latency video decode).
+
+What's in the box:
+
+- **Keyboard FPV** with live video and an arcade-style HUD (attitude ladder,
+  yaw tape, virtual sticks, battery/telemetry panels)
+- **Face follow** — press `p` and the drone tracks you: Haar-cascade detection
+  on a background thread feeding a P-controller; any stick key overrides
+- **Crash detection** — telemetry-based flip detection resyncs the controller
+  when the drone ends up on its back (tuned against real crash logs)
+- **Drift damper** — when the sticks are quiet, the loop counters the drone's
+  own reported drift instead of streaming zeros (the firmware's optical
+  position-hold goes blind on featureless floors)
+- **Flight recorder** — every session logged as JSONL (telemetry, commands,
+  rc stream, detections); `analyze.py` turns a log into a flight report and
+  matplotlib charts. Every safety feature above was built from these logs.
+- A hardened protocol layer: response-desync quarantine, ground-gated
+  keepalive, non-blocking action runner — lessons from a real crash, each
+  pinned by hardware-free tests
 
 ## Quick Start
 
@@ -26,14 +46,33 @@ give it focus** before flying. One hand per cluster:
 | `W` / `S` forward / back | `I` / `K` up / down (throttle) |
 | `A` / `D` strafe left / right | `J` / `L` yaw left / right |
 
-`t` takeoff · `g` land · `f` flip · `h` hover · `y`/`u` speed · **SPACE** = **EMERGENCY stop (drone drops!)** · **Esc**/`q` quit (lands first).
+`t` takeoff · `g` land · `f` flip · `h` hover · `p` **follow face** · `y`/`u` speed · **SPACE** = **EMERGENCY stop (drone drops!)** · **Esc**/`q` quit (lands first).
 
 Hold a key to move; release and that axis coasts to a hover within ~0.5 s
 (tune `HOLD_S` / `RATE_S` in `tello_app/flight/controller.py`).
 
 Design notes: video decodes on a background thread (PyAV if installed, else
 OpenCV/FFMPEG), latest-frame-wins; takeoff/land/flip run on a worker thread —
-so nothing can ever stall the rc stream or the HUD.
+so nothing can ever stall the rc stream or the HUD. Face detection follows the
+same pattern: its own thread, latest-detection-wins, and the follow controller
+is pure math (`tello_app/flight/tracking.py`) tuned via flight logs.
+
+## Flight recorder
+
+Every `drone.py` session writes a JSONL log to `logs/` (`--no-log` to disable):
+telemetry at 10 Hz, every command with round-trip time, the full rc stream
+tagged by who was steering (`keys` / `follow` / `damp` / `keepalive`), face
+detections, and flight events.
+
+```bash
+python analyze.py            # report on the newest flight: battery drain,
+                             # cmd latency, airborne rc gaps, follow share
+python analyze.py --plot     # + time-aligned charts (pip install matplotlib)
+```
+
+The crash detector and drift damper in this repo were both designed — and
+sign-verified — from these logs. If something weird happens in the air, the
+answer is usually one `jq` query away.
 
 ## Troubleshooting
 
@@ -66,21 +105,26 @@ so nothing can ever stall the rc stream or the HUD.
 tello-drone/
 ├── drone.py             # THE entry point: fpv (default) / repl / demo
 ├── keepalive.py         # Hold a session open so the drone doesn't idle-power-off
+├── analyze.py           # Flight-log report + charts
 ├── tello_app/
 │   ├── tello.py         # Tello class – UDP channels, commands, state receiver
-│   ├── util.py          # Host-side helpers (macOS AWDL warning)
-│   ├── flight/          # Flight brain: keymap, FlightController, ActionRunner, HUD content
+│   ├── flightlog.py     # JSONL flight recorder (fail-silent, thread-safe)
+│   ├── util.py          # Host-side helpers (Wi-Fi auto-join, macOS AWDL)
+│   ├── flight/          # Flight brain: keymap, controller, action runner,
+│   │                    #   crash monitor, follow/damper math, HUD content
+│   ├── vision/          # Face detector (background thread, latest-wins)
 │   ├── video/           # Background H.264 decode (PyAV / OpenCV), latest-frame-wins
 │   └── shells/          # Front-ends: fpv (video + keys), repl (raw SDK + demo)
 ├── docs/                # Research notes (IDEAS, LIBRARIES, ALTERNATIVES, FLIX-BUILD)
 │   └── REPAIR.md        # Historical repair log for the original (grounded) unit
-├── tests/               # Hardware-free unit tests (mock the Tello class)
+├── tests/               # Hardware-free tests (fake UDP drone, mocked Tello)
 ├── pyproject.toml       # ruff + basedpyright config
 └── CLAUDE.md            # Guidance for Claude Code
 ```
 
-Tests: `python -m unittest discover -s tests` (no drone needed).
-Lint/type-check: `uvx ruff check .` and `uvx basedpyright`.
+Tests: `python -m unittest discover -s tests` — 93 of them, no drone needed
+(the protocol tests run against a fake UDP drone on localhost). CI runs tests,
+ruff, and basedpyright on every push.
 
 ## SDK Command Reference (REPL)
 
