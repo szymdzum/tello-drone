@@ -178,7 +178,7 @@ def run(drone: Tello) -> None:
     try:
         print("Starting video stream...")
         drone.stream_on()
-        video = VideoStream()  # no settle sleep: both backends retry until the stream is up
+        video = VideoStream(log=drone.log)  # both backends retry until the stream is up
         print(f"Video decoder: {video.backend}"
               + ("" if video.backend == "pyav" else "  (pip install av for lower latency)"))
         video.start()

@@ -47,12 +47,15 @@ def flight_intervals(events: list[dict]) -> list[tuple[float, float]]:
 
 
 def max_rc_gap(events: list[dict], spans: list[tuple[float, float]]) -> float:
-    """Longest silence in the rc stream while airborne — the crash signature."""
+    """Longest silence in the rc stream while airborne — the crash signature.
+    Inter-send gaps only: action events log at COMPLETION (a quit-landing
+    tail is not starvation), so the span boundaries don't count as ticks."""
     worst = 0.0
     for t0, t1 in spans:
-        ticks = [t0] + [e["mono"] for e in events
-                        if e["type"] == "rc" and t0 <= e["mono"] <= t1] + [t1]
-        worst = max(worst, max(b - a for a, b in zip(ticks, ticks[1:], strict=False)))
+        ticks = [e["mono"] for e in events
+                 if e["type"] == "rc" and t0 <= e["mono"] <= t1]
+        if len(ticks) > 1:
+            worst = max(worst, max(b - a for a, b in zip(ticks, ticks[1:], strict=False)))
     return worst
 
 
@@ -98,6 +101,11 @@ def summarize(path: str) -> list[dict]:
         flag = "  ⚠ rc stream starved (>1 s airborne)" if gap > 1.0 else ""
         print(f"rc stream: {len(by_type.get('rc', []))} sends,"
               f" max airborne gap {gap:.2f} s{flag}")
+
+    stalls = by_type.get("video", [])
+    if stalls:
+        print(f"video:     {len(stalls)} stalls, worst {max(e['stall'] for e in stalls):.1f} s"
+              " (weak signal degrades video first; control may still be fine)")
 
     rcs = by_type.get("rc", [])
     follow_rc = [e for e in rcs if e.get("src") == "follow"]

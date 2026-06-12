@@ -31,11 +31,25 @@ AV_URL = "udp://@0.0.0.0:11111"
 class VideoStream:
     """Background H.264 reader; read() returns the newest decoded frame."""
 
-    def __init__(self) -> None:
+    def __init__(self, log=None) -> None:
         self._frame = None
         self._lock = threading.Lock()
         self._running = False
+        self._log = log
+        self._last_frame_at = 0.0
         self.backend = "pyav" if _HAVE_AV else "opencv"
+
+    def _store(self, frame) -> None:
+        """Keep the newest frame; log video stalls (>1 s between frames) —
+        weak signal degrades video long before commands/telemetry, and
+        pilots read a frozen feed as 'lost connection'."""
+        now = time.monotonic()
+        if self._log is not None and self._last_frame_at \
+                and now - self._last_frame_at > 1.0:
+            self._log.event("video", stall=round(now - self._last_frame_at, 2))
+        self._last_frame_at = now
+        with self._lock:
+            self._frame = frame
 
     def start(self) -> None:
         self._running = True
@@ -52,9 +66,7 @@ class VideoStream:
                     for frame in container.decode(video=0):
                         if not self._running:
                             break
-                        arr = frame.to_ndarray(format="bgr24")
-                        with self._lock:
-                            self._frame = arr
+                        self._store(frame.to_ndarray(format="bgr24"))
                 finally:
                     container.close()
             except Exception:
@@ -75,8 +87,7 @@ class VideoStream:
                     fails = 0
                 continue
             fails = 0
-            with self._lock:
-                self._frame = frame
+            self._store(frame)
         cap.release()
 
     def read(self):
