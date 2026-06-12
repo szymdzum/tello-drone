@@ -16,11 +16,12 @@ jobs:
         with:
           python-version: "3.14"
       # basedpyright reads venvPath/.venv from pyproject.toml, and the fpv/hud
-      # tests import cv2 — headless build, no GUI libs on the runner.
+      # tests import cv2 — headless build, no GUI libs on the runner. av and
+      # matplotlib are optional at runtime but must resolve for the type check.
       - name: Create venv with FPV deps
         run: |
           python -m venv .venv
-          .venv/bin/pip install opencv-python-headless numpy
+          .venv/bin/pip install opencv-python-headless numpy av matplotlib
       - name: Tests
         run: .venv/bin/python -m unittest discover -s tests -v
       - name: Lint (ruff)
